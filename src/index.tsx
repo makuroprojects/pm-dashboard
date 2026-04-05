@@ -140,6 +140,19 @@ async function serveFrontend(request: Request): Promise<Response> {
   return new Response('Not Found', { status: 404 })
 }
 
+// ─── Audit Log Rotation ───────────────────────────────
+import { prisma } from './lib/db'
+
+async function cleanupAuditLogs() {
+  const cutoff = new Date(Date.now() - env.AUDIT_LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000)
+  const { count } = await prisma.auditLog.deleteMany({ where: { createdAt: { lt: cutoff } } })
+  if (count > 0) console.log(`[Audit] Cleaned up ${count} logs older than ${env.AUDIT_LOG_RETENTION_DAYS} days`)
+}
+
+// Run on startup, then every 24 hours
+cleanupAuditLogs().catch(console.error)
+setInterval(() => cleanupAuditLogs().catch(console.error), 24 * 60 * 60 * 1000)
+
 // ─── Elysia App ────────────────────────────────────────
 import { createApp } from './app'
 

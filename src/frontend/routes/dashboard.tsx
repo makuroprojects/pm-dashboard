@@ -19,8 +19,7 @@ import {
   Title,
   Tooltip,
 } from '@mantine/core'
-import { createFileRoute, redirect } from '@tanstack/react-router'
-import { useState } from 'react'
+import { createFileRoute, redirect, useNavigate } from '@tanstack/react-router'
 import {
   TbActivity,
   TbArrowDownRight,
@@ -42,7 +41,12 @@ import {
 } from 'react-icons/tb'
 import { useLogout, useSession } from '@/frontend/hooks/useAuth'
 
+const validTabs = ['dashboard', 'analytics', 'orders', 'messages', 'calendar', 'settings'] as const
+
 export const Route = createFileRoute('/dashboard')({
+  validateSearch: (search: Record<string, unknown>) => ({
+    tab: validTabs.includes(search.tab as any) ? (search.tab as string) : 'dashboard',
+  }),
   beforeLoad: async ({ context }) => {
     try {
       const data = await context.queryClient.ensureQueryData({
@@ -73,7 +77,9 @@ function DashboardPage() {
   const { data } = useSession()
   const logout = useLogout()
   const user = data?.user
-  const [active, setActive] = useState('dashboard')
+  const { tab: active } = Route.useSearch()
+  const navigate = useNavigate()
+  const setActive = (key: string) => navigate({ to: '/dashboard', search: { tab: key } })
 
   return (
     <AppShell
@@ -128,7 +134,7 @@ function DashboardPage() {
         </AppShell.Section>
 
         <AppShell.Section>
-          <Box p="sm" style={{ borderTop: '1px solid var(--mantine-color-dark-4)' }}>
+          <Box p="sm" style={{ borderTop: '1px solid var(--mantine-color-default-border)' }}>
             <Group justify="space-between">
               <Group gap="xs">
                 <Avatar color={user?.role === 'SUPER_ADMIN' ? 'red' : 'violet'} radius="xl" size="sm">
@@ -430,7 +436,7 @@ function RecentActivityTable() {
       <Text fw={600} mb="md">Recent Activity</Text>
       <Stack gap="sm">
         {activities.map((act, i) => (
-          <Paper key={i} p="sm" radius="sm" bg="dark.6">
+          <Paper key={i} p="sm" radius="sm" bg="var(--mantine-color-default-hover)">
             <Group justify="space-between">
               <Group gap="sm">
                 <Avatar color={act.color} radius="xl" size="sm">

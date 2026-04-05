@@ -29,8 +29,8 @@ declare module '@tanstack/react-router' {
 export function App() {
   return (
     <>
-      <ColorSchemeScript defaultColorScheme="dark" />
-      <MantineProvider theme={theme} defaultColorScheme="dark" forceColorScheme="dark">
+      <ColorSchemeScript defaultColorScheme="auto" />
+      <MantineProvider theme={theme} defaultColorScheme="auto">
         <QueryClientProvider client={queryClient}>
           <RouterProvider router={router} />
         </QueryClientProvider>
