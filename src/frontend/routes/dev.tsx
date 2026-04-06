@@ -1033,7 +1033,7 @@ function DatabasePanelInner() {
           defaultViewport={savedViewport ?? undefined}
           fitView={!savedViewport}
           fitViewOptions={{ padding: 0.2 }}
-          proOptions={{ hideAttribution: true }}
+          minZoom={0.05} maxZoom={5} proOptions={{ hideAttribution: true }}
         >
           <Background gap={20} size={1} />
           <Controls />
@@ -1484,7 +1484,7 @@ function ApiRoutesFlowInner() {
           defaultViewport={flow.savedVp ?? undefined}
           fitView={!flow.savedVp}
           fitViewOptions={{ padding: 0.2 }}
-          proOptions={{ hideAttribution: true }}
+          minZoom={0.05} maxZoom={5} proOptions={{ hideAttribution: true }}
         >
           <Background gap={20} size={1} />
           <Controls />
@@ -1581,7 +1581,7 @@ function FileStructureFlowInner() {
           defaultViewport={flow.savedVp ?? undefined}
           fitView={!flow.savedVp}
           fitViewOptions={{ padding: 0.2 }}
-          proOptions={{ hideAttribution: true }}
+          minZoom={0.05} maxZoom={5} proOptions={{ hideAttribution: true }}
         >
           <Background gap={20} size={1} />
           <Controls />
@@ -1663,7 +1663,7 @@ function UserFlowViewInner() {
           defaultViewport={flow.savedVp ?? undefined}
           fitView={!flow.savedVp}
           fitViewOptions={{ padding: 0.2 }}
-          proOptions={{ hideAttribution: true }}
+          minZoom={0.05} maxZoom={5} proOptions={{ hideAttribution: true }}
         >
           <Background gap={20} size={1} />
           <Controls />
@@ -1767,7 +1767,7 @@ function DataFlowViewInner() {
           defaultViewport={flow.savedVp ?? undefined}
           fitView={!flow.savedVp}
           fitViewOptions={{ padding: 0.2 }}
-          proOptions={{ hideAttribution: true }}
+          minZoom={0.05} maxZoom={5} proOptions={{ hideAttribution: true }}
         >
           <Background gap={20} size={1} />
           <Controls />
@@ -1877,7 +1877,7 @@ function EnvMapFlowInner() {
         <Tooltip label="Reload"><ActionIcon variant="subtle" size="sm" loading={isFetching} onClick={() => qc.invalidateQueries({ queryKey: ['admin', 'env-map'] })}><TbRefresh size={16} /></ActionIcon></Tooltip>
       </Group>
       <div style={{ flex: 1 }}>
-        <ReactFlow nodes={flow.nodes} edges={flow.edges} onNodesChange={flow.handleNodesChange} onEdgesChange={flow.onEdgesChange} onMoveEnd={flow.handleMoveEnd} nodeTypes={envNodeTypes} defaultViewport={flow.savedVp ?? undefined} fitView={!flow.savedVp} fitViewOptions={{ padding: 0.2 }} proOptions={{ hideAttribution: true }}>
+        <ReactFlow nodes={flow.nodes} edges={flow.edges} onNodesChange={flow.handleNodesChange} onEdgesChange={flow.onEdgesChange} onMoveEnd={flow.handleMoveEnd} nodeTypes={envNodeTypes} defaultViewport={flow.savedVp ?? undefined} fitView={!flow.savedVp} fitViewOptions={{ padding: 0.2 }} minZoom={0.05} maxZoom={5} proOptions={{ hideAttribution: true }}>
           <Background gap={20} size={1} /><Controls />
         </ReactFlow>
       </div>
@@ -2009,7 +2009,7 @@ function TestCoverageFlowInner() {
         <Tooltip label="Reload"><ActionIcon variant="subtle" size="sm" loading={isFetching} onClick={() => qc.invalidateQueries({ queryKey: ['admin', 'test-coverage'] })}><TbRefresh size={16} /></ActionIcon></Tooltip>
       </Group>
       <div style={{ flex: 1 }}>
-        <ReactFlow nodes={flow.nodes} edges={flow.edges} onNodesChange={flow.handleNodesChange} onEdgesChange={flow.onEdgesChange} onMoveEnd={flow.handleMoveEnd} nodeTypes={testNodeTypes} defaultViewport={flow.savedVp ?? undefined} fitView={!flow.savedVp} fitViewOptions={{ padding: 0.2 }} proOptions={{ hideAttribution: true }}>
+        <ReactFlow nodes={flow.nodes} edges={flow.edges} onNodesChange={flow.handleNodesChange} onEdgesChange={flow.onEdgesChange} onMoveEnd={flow.handleMoveEnd} nodeTypes={testNodeTypes} defaultViewport={flow.savedVp ?? undefined} fitView={!flow.savedVp} fitViewOptions={{ padding: 0.2 }} minZoom={0.05} maxZoom={5} proOptions={{ hideAttribution: true }}>
           <Background gap={20} size={1} /><Controls />
         </ReactFlow>
       </div>
@@ -2113,7 +2113,7 @@ function DependenciesFlowInner() {
         <Tooltip label="Reload"><ActionIcon variant="subtle" size="sm" loading={isFetching} onClick={() => qc.invalidateQueries({ queryKey: ['admin', 'dependencies'] })}><TbRefresh size={16} /></ActionIcon></Tooltip>
       </Group>
       <div style={{ flex: 1 }}>
-        <ReactFlow nodes={flow.nodes} edges={flow.edges} onNodesChange={flow.handleNodesChange} onEdgesChange={flow.onEdgesChange} onMoveEnd={flow.handleMoveEnd} nodeTypes={depNodeTypes} defaultViewport={flow.savedVp ?? undefined} fitView={!flow.savedVp} fitViewOptions={{ padding: 0.2 }} proOptions={{ hideAttribution: true }}>
+        <ReactFlow nodes={flow.nodes} edges={flow.edges} onNodesChange={flow.handleNodesChange} onEdgesChange={flow.onEdgesChange} onMoveEnd={flow.handleMoveEnd} nodeTypes={depNodeTypes} defaultViewport={flow.savedVp ?? undefined} fitView={!flow.savedVp} fitViewOptions={{ padding: 0.2 }} minZoom={0.05} maxZoom={5} proOptions={{ hideAttribution: true }}>
           <Background gap={20} size={1} /><Controls />
         </ReactFlow>
       </div>
@@ -2204,7 +2204,7 @@ function MigrationsFlowInner() {
         <Tooltip label="Reload"><ActionIcon variant="subtle" size="sm" loading={isFetching} onClick={() => qc.invalidateQueries({ queryKey: ['admin', 'migrations'] })}><TbRefresh size={16} /></ActionIcon></Tooltip>
       </Group>
       <div style={{ flex: 1 }}>
-        <ReactFlow nodes={flow.nodes} edges={flow.edges} onNodesChange={flow.handleNodesChange} onEdgesChange={flow.onEdgesChange} onMoveEnd={flow.handleMoveEnd} nodeTypes={migrationNodeTypes} defaultViewport={flow.savedVp ?? undefined} fitView={!flow.savedVp} fitViewOptions={{ padding: 0.2 }} proOptions={{ hideAttribution: true }}>
+        <ReactFlow nodes={flow.nodes} edges={flow.edges} onNodesChange={flow.handleNodesChange} onEdgesChange={flow.onEdgesChange} onMoveEnd={flow.handleMoveEnd} nodeTypes={migrationNodeTypes} defaultViewport={flow.savedVp ?? undefined} fitView={!flow.savedVp} fitViewOptions={{ padding: 0.2 }} minZoom={0.05} maxZoom={5} proOptions={{ hideAttribution: true }}>
           <Background gap={20} size={1} /><Controls />
         </ReactFlow>
       </div>
@@ -2335,7 +2335,7 @@ function SessionsFlowInner() {
         <Tooltip label="Reload"><ActionIcon variant="subtle" size="sm" loading={isFetching} onClick={() => qc.invalidateQueries({ queryKey: ['admin', 'sessions'] })}><TbRefresh size={16} /></ActionIcon></Tooltip>
       </Group>
       <div style={{ flex: 1 }}>
-        <ReactFlow nodes={flow.nodes} edges={flow.edges} onNodesChange={flow.handleNodesChange} onEdgesChange={flow.onEdgesChange} onMoveEnd={flow.handleMoveEnd} nodeTypes={sessionNodeTypes} defaultViewport={flow.savedVp ?? undefined} fitView={!flow.savedVp} fitViewOptions={{ padding: 0.2 }} proOptions={{ hideAttribution: true }}>
+        <ReactFlow nodes={flow.nodes} edges={flow.edges} onNodesChange={flow.handleNodesChange} onEdgesChange={flow.onEdgesChange} onMoveEnd={flow.handleMoveEnd} nodeTypes={sessionNodeTypes} defaultViewport={flow.savedVp ?? undefined} fitView={!flow.savedVp} fitViewOptions={{ padding: 0.2 }} minZoom={0.05} maxZoom={5} proOptions={{ hideAttribution: true }}>
           <Background gap={20} size={1} /><Controls />
         </ReactFlow>
       </div>
@@ -2456,7 +2456,7 @@ function LiveRequestsFlowInner() {
         <LayoutSelector layoutKey={storageKey('live-requests')} onLayout={flow.relayout} />
       </Group>
       <div style={{ flex: 1 }}>
-        <ReactFlow nodes={flow.nodes} edges={flow.edges} onNodesChange={flow.handleNodesChange} onEdgesChange={flow.onEdgesChange} onMoveEnd={flow.handleMoveEnd} nodeTypes={liveNodeTypes} defaultViewport={flow.savedVp ?? undefined} fitView={!flow.savedVp} fitViewOptions={{ padding: 0.2 }} proOptions={{ hideAttribution: true }}>
+        <ReactFlow nodes={flow.nodes} edges={flow.edges} onNodesChange={flow.handleNodesChange} onEdgesChange={flow.onEdgesChange} onMoveEnd={flow.handleMoveEnd} nodeTypes={liveNodeTypes} defaultViewport={flow.savedVp ?? undefined} fitView={!flow.savedVp} fitViewOptions={{ padding: 0.2 }} minZoom={0.05} maxZoom={5} proOptions={{ hideAttribution: true }}>
           <Background gap={20} size={1} /><Controls />
         </ReactFlow>
       </div>
