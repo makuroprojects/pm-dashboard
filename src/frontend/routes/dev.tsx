@@ -1207,7 +1207,7 @@ import ELK from 'elkjs/lib/elk.bundled.js'
 const elk = new ELK()
 type LayoutType = 'horizontal' | 'vertical' | 'radial' | 'force'
 
-const ELK_OPTIONS: Record<LayoutType, Record<string, string>> = {
+const ELK_OPTIONS: Record<string, Record<string, string>> = {
   horizontal: {
     'elk.algorithm': 'layered',
     'elk.direction': 'RIGHT',
@@ -1222,17 +1222,35 @@ const ELK_OPTIONS: Record<LayoutType, Record<string, string>> = {
     'elk.spacing.nodeNode': '60',
     'elk.layered.crossingMinimization.strategy': 'LAYER_SWEEP',
   },
-  radial: {
-    'elk.algorithm': 'radial',
-    'elk.radial.compactor': 'WEDGE_COMPACTION',
-    'elk.spacing.nodeNode': '80',
-  },
   force: {
     'elk.algorithm': 'force',
     'elk.force.iterations': '100',
     'elk.spacing.nodeNode': '80',
     'elk.force.repulsion': '2.0',
   },
+}
+
+function radialLayout(nodes: Node[], nodeWidth = 240, nodeHeight = 100): Node[] {
+  if (nodes.length === 0) return nodes
+  if (nodes.length === 1) return [{ ...nodes[0], position: { x: 0, y: 0 } }]
+
+  const perRing = Math.max(6, Math.ceil(nodes.length * 0.6))
+  const ringGap = Math.max(nodeWidth, nodeHeight) + 80
+
+  return nodes.map((n, i) => {
+    const ring = Math.floor(i / perRing)
+    const idxInRing = i % perRing
+    const countInRing = Math.min(perRing, nodes.length - ring * perRing)
+    const radius = (ring + 1) * ringGap
+    const angle = (2 * Math.PI * idxInRing) / countInRing - Math.PI / 2
+    return {
+      ...n,
+      position: {
+        x: radius * Math.cos(angle) - nodeWidth / 2,
+        y: radius * Math.sin(angle) - nodeHeight / 2,
+      },
+    }
+  })
 }
 
 async function getLayoutedElements(
@@ -1244,7 +1262,12 @@ async function getLayoutedElements(
 ): Promise<{ nodes: Node[]; edges: Edge[] }> {
   if (nodes.length === 0) return { nodes, edges }
 
-  const isHorizontal = layout === 'horizontal'
+  // Radial: ELK radial needs a tree structure, so use custom circle layout
+  if (layout === 'radial') {
+    return { nodes: radialLayout(nodes, nodeWidth, nodeHeight), edges }
+  }
+
+  // ELK for horizontal, vertical, force
   const graph = {
     id: 'root',
     layoutOptions: ELK_OPTIONS[layout],
