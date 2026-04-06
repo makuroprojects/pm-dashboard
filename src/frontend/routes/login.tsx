@@ -1,5 +1,6 @@
 import {
   Alert,
+  Box,
   Button,
   Center,
   Divider,
@@ -15,6 +16,7 @@ import { useState } from 'react'
 import { FcGoogle } from 'react-icons/fc'
 import { TbAlertCircle, TbLogin, TbLock, TbMail } from 'react-icons/tb'
 import { getDefaultRoute, useLogin } from '@/frontend/hooks/useAuth'
+import { ThemeToggle } from '@/frontend/components/ThemeToggle'
 
 export const Route = createFileRoute('/login')({
   validateSearch: (search: Record<string, unknown>) => ({
@@ -49,7 +51,10 @@ function LoginPage() {
   }
 
   return (
-    <Center mih="100vh">
+    <Center mih="100vh" style={{ position: 'relative' }}>
+      <Box style={{ position: 'absolute', top: 16, right: 16 }}>
+        <ThemeToggle />
+      </Box>
       <Paper shadow="md" p="xl" radius="md" w={400} withBorder>
         <form onSubmit={handleSubmit}>
           <Stack gap="md">

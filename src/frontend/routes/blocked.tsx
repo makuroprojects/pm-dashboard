@@ -1,5 +1,6 @@
 import {
   Alert,
+  Box,
   Button,
   Center,
   Paper,
@@ -11,6 +12,7 @@ import {
 import { createFileRoute } from '@tanstack/react-router'
 import { TbAlertTriangle, TbLogout, TbShieldOff } from 'react-icons/tb'
 import { useLogout } from '@/frontend/hooks/useAuth'
+import { ThemeToggle } from '@/frontend/components/ThemeToggle'
 
 export const Route = createFileRoute('/blocked')({
   component: BlockedPage,
@@ -20,7 +22,10 @@ function BlockedPage() {
   const logout = useLogout()
 
   return (
-    <Center mih="100vh">
+    <Center mih="100vh" style={{ position: 'relative' }}>
+      <Box style={{ position: 'absolute', top: 16, right: 16 }}>
+        <ThemeToggle />
+      </Box>
       <Paper shadow="md" p="xl" radius="md" w={460} withBorder>
         <Stack align="center" gap="lg">
           <ThemeIcon color="red" size={72} radius="xl" variant="light">

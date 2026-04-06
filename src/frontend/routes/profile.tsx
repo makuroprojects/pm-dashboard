@@ -13,6 +13,7 @@ import { createFileRoute, Link, redirect } from '@tanstack/react-router'
 import { TbLogout, TbUser } from 'react-icons/tb'
 import { modals } from '@mantine/modals'
 import { useLogout, useSession } from '@/frontend/hooks/useAuth'
+import { ThemeToggle } from '@/frontend/components/ThemeToggle'
 
 export const Route = createFileRoute('/profile')({
   beforeLoad: async ({ context }) => {
@@ -48,6 +49,7 @@ function ProfilePage() {
         <Group justify="space-between">
           <Title order={2}>Profile</Title>
           <Group gap="xs">
+            <ThemeToggle size="sm" />
             {user?.role === 'SUPER_ADMIN' && (
               <Button component={Link} to="/dev" variant="light" size="xs">
                 Dev Console

@@ -44,6 +44,7 @@ import {
 import { useState } from 'react'
 import { modals } from '@mantine/modals'
 import { useLogout, useSession } from '@/frontend/hooks/useAuth'
+import { ThemeToggle } from '@/frontend/components/ThemeToggle'
 
 const validTabs = ['dashboard', 'analytics', 'orders', 'messages', 'calendar', 'settings'] as const
 
@@ -215,6 +216,7 @@ function DashboardPage() {
                     {user?.name?.charAt(0).toUpperCase()}
                   </Avatar>
                 </Tooltip>
+                <ThemeToggle size="sm" />
                 <Tooltip label="Profile" position="right">
                   <ActionIcon variant="subtle" color="gray" size="sm" component="a" href="/profile">
                     <TbUser size={14} />
@@ -244,6 +246,7 @@ function DashboardPage() {
                   </div>
                 </Group>
                 <Group gap={4}>
+                  <ThemeToggle size="sm" />
                   <Tooltip label="Profile">
                     <ActionIcon variant="subtle" color="gray" component="a" href="/profile">
                       <TbUser size={16} />

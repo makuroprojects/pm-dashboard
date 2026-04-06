@@ -66,6 +66,7 @@ import {
 import { modals } from '@mantine/modals'
 import { useLogout, useSession, type Role } from '@/frontend/hooks/useAuth'
 import { usePresence } from '@/frontend/hooks/usePresence'
+import { ThemeToggle } from '@/frontend/components/ThemeToggle'
 
 const validTabs = ['overview', 'users', 'app-logs', 'user-logs', 'database', 'project', 'settings'] as const
 
@@ -210,6 +211,7 @@ function DevPage() {
                     {user?.name?.charAt(0).toUpperCase()}
                   </Avatar>
                 </Tooltip>
+                <ThemeToggle size="sm" />
                 <Tooltip label="Logout" position="right">
                   <ActionIcon
                     variant="subtle"
@@ -233,16 +235,19 @@ function DevPage() {
                     <Text size="xs" c="dimmed">{user?.email}</Text>
                   </div>
                 </Group>
-                <Tooltip label="Logout">
-                  <ActionIcon
-                    variant="subtle"
-                    color="red"
-                    onClick={confirmLogout}
-                    loading={logout.isPending}
-                  >
-                    <TbLogout size={16} />
-                  </ActionIcon>
-                </Tooltip>
+                <Group gap={4}>
+                  <ThemeToggle size="sm" />
+                  <Tooltip label="Logout">
+                    <ActionIcon
+                      variant="subtle"
+                      color="red"
+                      onClick={confirmLogout}
+                      loading={logout.isPending}
+                    >
+                      <TbLogout size={16} />
+                    </ActionIcon>
+                  </Tooltip>
+                </Group>
               </Group>
             )}
           </Box>
