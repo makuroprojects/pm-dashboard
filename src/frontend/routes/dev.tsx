@@ -1005,6 +1005,16 @@ function DatabasePanelInner() {
           <Badge variant="light" color="violet" size="sm">{schema.enums.length} enums</Badge>
           <Badge variant="light" color="blue" size="sm">{schema.relations.length} relations</Badge>
         </Group>
+        <LayoutSelector layoutKey={STORAGE_KEY} onLayout={(layout) => {
+          setNodes((cur) => {
+            const laid = applyLayout(cur, edges, layout)
+            localStorage.removeItem(`${STORAGE_KEY}`)
+            const pos: Record<string, { x: number; y: number }> = {}
+            for (const n of laid) pos[n.id] = n.position
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(pos))
+            return laid
+          })
+        }} />
         <Tooltip label="Reload schema">
           <ActionIcon variant="subtle" size="sm" loading={isFetching} onClick={() => qc.invalidateQueries({ queryKey: ['admin', 'schema'] })}>
             <TbRefresh size={16} />
@@ -1190,6 +1200,114 @@ function ProjectPanel() {
   )
 }
 
+// ─── Layout Algorithms ────────────────────────
+type LayoutType = 'horizontal' | 'vertical' | 'radial' | 'force'
+
+function applyLayout(nodes: Node[], edges: Edge[], layout: LayoutType, nodeWidth = 240, nodeHeight = 100): Node[] {
+  if (nodes.length === 0) return nodes
+  const gap = 40
+
+  if (layout === 'horizontal') {
+    const cols = Math.max(1, Math.ceil(Math.sqrt(nodes.length)))
+    return nodes.map((n, i) => ({
+      ...n,
+      position: { x: (i % cols) * (nodeWidth + gap), y: Math.floor(i / cols) * (nodeHeight + gap) },
+    }))
+  }
+
+  if (layout === 'vertical') {
+    const rows = Math.max(1, Math.ceil(Math.sqrt(nodes.length)))
+    return nodes.map((n, i) => ({
+      ...n,
+      position: { x: Math.floor(i / rows) * (nodeWidth + gap), y: (i % rows) * (nodeHeight + gap) },
+    }))
+  }
+
+  if (layout === 'radial') {
+    const cx = nodes.length * 30
+    const cy = nodes.length * 30
+    const baseRadius = Math.max(200, nodes.length * 40)
+    // Multiple rings if many nodes
+    const perRing = Math.max(8, Math.ceil(nodes.length / 3))
+    return nodes.map((n, i) => {
+      const ring = Math.floor(i / perRing)
+      const idxInRing = i % perRing
+      const totalInRing = Math.min(perRing, nodes.length - ring * perRing)
+      const angle = (2 * Math.PI * idxInRing) / totalInRing - Math.PI / 2
+      const r = baseRadius + ring * (nodeHeight + gap + 60)
+      return { ...n, position: { x: cx + r * Math.cos(angle) - nodeWidth / 2, y: cy + r * Math.sin(angle) - nodeHeight / 2 } }
+    })
+  }
+
+  // Force-directed layout
+  const positions = nodes.map((n, i) => ({
+    x: 400 + (Math.random() - 0.5) * nodes.length * 50,
+    y: 300 + (Math.random() - 0.5) * nodes.length * 50,
+    vx: 0, vy: 0,
+  }))
+  const idIdx = new Map(nodes.map((n, i) => [n.id, i]))
+
+  for (let iter = 0; iter < 80; iter++) {
+    const alpha = 1 - iter / 80
+    // Repulsion between all nodes
+    for (let i = 0; i < positions.length; i++) {
+      for (let j = i + 1; j < positions.length; j++) {
+        let dx = positions[i].x - positions[j].x
+        let dy = positions[i].y - positions[j].y
+        const dist = Math.max(1, Math.sqrt(dx * dx + dy * dy))
+        const force = (300 * alpha) / dist
+        const fx = (dx / dist) * force
+        const fy = (dy / dist) * force
+        positions[i].vx += fx; positions[i].vy += fy
+        positions[j].vx -= fx; positions[j].vy -= fy
+      }
+    }
+    // Attraction along edges
+    for (const e of edges) {
+      const si = idIdx.get(e.source)
+      const ti = idIdx.get(e.target)
+      if (si === undefined || ti === undefined) continue
+      const dx = positions[ti].x - positions[si].x
+      const dy = positions[ti].y - positions[si].y
+      const dist = Math.max(1, Math.sqrt(dx * dx + dy * dy))
+      const force = dist * 0.01 * alpha
+      const fx = (dx / dist) * force
+      const fy = (dy / dist) * force
+      positions[si].vx += fx; positions[si].vy += fy
+      positions[ti].vx -= fx; positions[ti].vy -= fy
+    }
+    // Apply velocities with damping
+    for (const p of positions) {
+      p.x += p.vx * 0.8; p.y += p.vy * 0.8
+      p.vx *= 0.5; p.vy *= 0.5
+    }
+  }
+
+  return nodes.map((n, i) => ({ ...n, position: { x: positions[i].x, y: positions[i].y } }))
+}
+
+function savedLayout(key: string): LayoutType {
+  try { return (localStorage.getItem(`${key}:layout`) as LayoutType) || 'horizontal' } catch { return 'horizontal' }
+}
+
+function LayoutSelector({ layoutKey, onLayout }: { layoutKey: string; onLayout: (layout: LayoutType) => void }) {
+  const [layout, setLayout] = useState<LayoutType>(() => savedLayout(layoutKey))
+  const change = (v: string) => {
+    const l = v as LayoutType
+    setLayout(l)
+    localStorage.setItem(`${layoutKey}:layout`, l)
+    onLayout(l)
+  }
+  return (
+    <SegmentedControl size="xs" value={layout} onChange={change} data={[
+      { label: '↔ Horizontal', value: 'horizontal' },
+      { label: '↕ Vertical', value: 'vertical' },
+      { label: '◎ Radial', value: 'radial' },
+      { label: '⚡ Force', value: 'force' },
+    ]} />
+  )
+}
+
 // ─── Shared flow hook ─────────────────────────
 function useFlowAutoSave(key: string) {
   const saveTimer = useRef<ReturnType<typeof setTimeout>>()
@@ -1221,7 +1339,21 @@ function useFlowAutoSave(key: string) {
     vpTimer.current = setTimeout(() => localStorage.setItem(`${key}:viewport`, JSON.stringify(vp)), 500)
   }, [key])
 
-  return { nodes, setNodes, edges, setEdges, onEdgesChange, handleNodesChange, handleMoveEnd, savedVp, loadPos }
+  const relayout = useCallback((layout: LayoutType) => {
+    setNodes((cur) => {
+      const laid = applyLayout(cur, edges, layout)
+      // Clear saved positions so layout takes effect
+      localStorage.removeItem(`${key}:positions`)
+      localStorage.removeItem(`${key}:viewport`)
+      // Save new positions after layout
+      const pos: Record<string, { x: number; y: number }> = {}
+      for (const n of laid) pos[n.id] = n.position
+      localStorage.setItem(`${key}:positions`, JSON.stringify(pos))
+      return laid
+    })
+  }, [key, edges])
+
+  return { nodes, setNodes, edges, setEdges, onEdgesChange, handleNodesChange, handleMoveEnd, savedVp, loadPos, relayout }
 }
 
 // ─── API Routes Flow ──────────────────────────
@@ -1319,6 +1451,7 @@ function ApiRoutesFlowInner() {
         {Object.entries(data.summary.byAuth).map(([a, c]) => (
           <Badge key={a} size="sm" variant="dot" color={AUTH_COLORS[a] || 'gray'}>{a}: {c}</Badge>
         ))}
+        <LayoutSelector layoutKey={storageKey('api-routes')} onLayout={flow.relayout} />
         <Tooltip label="Reload routes">
           <ActionIcon variant="subtle" size="sm" loading={isFetching} onClick={() => qc.invalidateQueries({ queryKey: ['admin', 'routes'] })}>
             <TbRefresh size={16} />
@@ -1415,6 +1548,7 @@ function FileStructureFlowInner() {
           { label: 'Tests', value: 'test' },
         ]} />
         <Text size="xs" c="dimmed">{data.summary.totalLines} lines | {data.summary.totalExports} exports | {data.summary.totalImports} imports</Text>
+        <LayoutSelector layoutKey={storageKey('file-structure')} onLayout={flow.relayout} />
         <Tooltip label="Reload files">
           <ActionIcon variant="subtle" size="sm" loading={isFetching} onClick={() => qc.invalidateQueries({ queryKey: ['admin', 'project-structure'] })}>
             <TbRefresh size={16} />
@@ -1501,6 +1635,7 @@ function UserFlowViewInner() {
         <Badge size="sm" color="orange" variant="light">ADMIN → /dashboard</Badge>
         <Badge size="sm" color="blue" variant="light">USER → /profile</Badge>
         <Badge size="sm" color="gray" variant="light">Blocked → /blocked</Badge>
+        <LayoutSelector layoutKey={storageKey('user-flow')} onLayout={flow.relayout} />
       </Group>
       <div style={{ flex: 1 }}>
         <ReactFlow
@@ -1604,6 +1739,7 @@ function DataFlowViewInner() {
         <Badge size="sm" color="orange" variant="light">Database</Badge>
         <Badge size="sm" color="red" variant="light">Redis</Badge>
         <Badge size="sm" color="violet" variant="light">WebSocket</Badge>
+        <LayoutSelector layoutKey={storageKey('data-flow')} onLayout={flow.relayout} />
       </Group>
       <div style={{ flex: 1 }}>
         <ReactFlow
@@ -1722,6 +1858,7 @@ function EnvMapFlowInner() {
         <Badge size="sm" color="red" variant="light">Unset: {data.summary.unset}</Badge>
         <Badge size="sm" color="orange" variant="light">Required: {data.summary.required}</Badge>
         <Text size="xs" c="dimmed">Total: {data.summary.total}</Text>
+        <LayoutSelector layoutKey={storageKey('env-map')} onLayout={flow.relayout} />
         <Tooltip label="Reload"><ActionIcon variant="subtle" size="sm" loading={isFetching} onClick={() => qc.invalidateQueries({ queryKey: ['admin', 'env-map'] })}><TbRefresh size={16} /></ActionIcon></Tooltip>
       </Group>
       <div style={{ flex: 1 }}>
@@ -1853,6 +1990,7 @@ function TestCoverageFlowInner() {
           {data.summary.coveragePercent}% coverage
         </Badge>
         <Text size="xs" c="dimmed">{data.summary.totalTests} test files</Text>
+        <LayoutSelector layoutKey={storageKey('test-coverage')} onLayout={flow.relayout} />
         <Tooltip label="Reload"><ActionIcon variant="subtle" size="sm" loading={isFetching} onClick={() => qc.invalidateQueries({ queryKey: ['admin', 'test-coverage'] })}><TbRefresh size={16} /></ActionIcon></Tooltip>
       </Group>
       <div style={{ flex: 1 }}>
@@ -1956,6 +2094,7 @@ function DependenciesFlowInner() {
         {Object.entries(data.summary.byCategory).map(([c, n]) => (
           <Badge key={c} size="sm" variant="light" color={CATEGORY_COLORS[c] || 'gray'}>{c}: {n}</Badge>
         ))}
+        <LayoutSelector layoutKey={storageKey('dependencies')} onLayout={flow.relayout} />
         <Tooltip label="Reload"><ActionIcon variant="subtle" size="sm" loading={isFetching} onClick={() => qc.invalidateQueries({ queryKey: ['admin', 'dependencies'] })}><TbRefresh size={16} /></ActionIcon></Tooltip>
       </Group>
       <div style={{ flex: 1 }}>
@@ -2046,6 +2185,7 @@ function MigrationsFlowInner() {
         <Badge size="sm" color="orange" variant="light">{data.summary.totalMigrations} migrations</Badge>
         <Badge size="sm" variant="light">{data.summary.totalChanges} changes</Badge>
         {data.summary.firstMigration && <Text size="xs" c="dimmed">From {new Date(data.summary.firstMigration).toLocaleDateString()} → {new Date(data.summary.lastMigration!).toLocaleDateString()}</Text>}
+        <LayoutSelector layoutKey={storageKey('migrations')} onLayout={flow.relayout} />
         <Tooltip label="Reload"><ActionIcon variant="subtle" size="sm" loading={isFetching} onClick={() => qc.invalidateQueries({ queryKey: ['admin', 'migrations'] })}><TbRefresh size={16} /></ActionIcon></Tooltip>
       </Group>
       <div style={{ flex: 1 }}>
@@ -2176,6 +2316,7 @@ function SessionsFlowInner() {
         <Badge size="sm" color="gray" variant="light">Expired: {data.summary.expiredSessions}</Badge>
         <Badge size="sm" color="teal" variant="light">Online: {data.summary.onlineUsers}</Badge>
         <Text size="xs" c="dimmed">Auto-refresh 10s</Text>
+        <LayoutSelector layoutKey={storageKey('sessions')} onLayout={flow.relayout} />
         <Tooltip label="Reload"><ActionIcon variant="subtle" size="sm" loading={isFetching} onClick={() => qc.invalidateQueries({ queryKey: ['admin', 'sessions'] })}><TbRefresh size={16} /></ActionIcon></Tooltip>
       </Group>
       <div style={{ flex: 1 }}>
@@ -2297,6 +2438,7 @@ function LiveRequestsFlowInner() {
         <ActionIcon variant="subtle" size="sm" onClick={() => { statsRef.current.clear(); setEvents([]) }}>
           <TbTrash size={16} />
         </ActionIcon>
+        <LayoutSelector layoutKey={storageKey('live-requests')} onLayout={flow.relayout} />
       </Group>
       <div style={{ flex: 1 }}>
         <ReactFlow nodes={flow.nodes} edges={flow.edges} onNodesChange={flow.handleNodesChange} onEdgesChange={flow.onEdgesChange} onMoveEnd={flow.handleMoveEnd} nodeTypes={liveNodeTypes} defaultViewport={flow.savedVp ?? undefined} fitView={!flow.savedVp} fitViewOptions={{ padding: 0.2 }} proOptions={{ hideAttribution: true }}>
