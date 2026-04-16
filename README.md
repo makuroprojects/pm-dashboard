@@ -13,6 +13,7 @@ Full-stack web application template built with Bun, Elysia, React 19, and Vite.
 - **Auth**: Session-based (bcrypt + HttpOnly cookies) + Google OAuth
 - **Real-time**: WebSocket presence (Bun native)
 - **Dev Tools**: Click-to-source inspector (Ctrl+Shift+Cmd+C), HMR, Biome linter
+- **MCP**: Local MCP server (`scripts/mcp/*`) — lets Claude drive the app (tickets, admin, db, logs, dev)
 - **Testing**: bun:test (unit + integration)
 
 ## Prerequisites
@@ -127,6 +128,7 @@ Three roles with hierarchical access:
 |------|--------------|------------|-------------|
 | `SUPER_ADMIN` | `/dev` | `/dev`, `/dashboard`, `/profile` | Full system access, user management, logs |
 | `ADMIN` | `/dashboard` | `/dashboard`, `/profile` | Dashboard access with analytics |
+| `QC` | `/dashboard` | `/dashboard` (QC-scoped tickets), `/profile` | Verifies tickets in `READY_FOR_QC` state |
 | `USER` | `/profile` | `/profile` | Profile only |
 
 - Default role for new users is `USER`
@@ -171,6 +173,44 @@ SUPER_ADMIN-only endpoints:
 | `GET` | `/api/admin/migrations` | Prisma migration timeline (changes, SQL preview) |
 | `GET` | `/api/admin/sessions` | Active sessions with online status |
 
+## Tickets
+
+Role-gated ticket tracking with a status machine:
+
+```
+OPEN → IN_PROGRESS → READY_FOR_QC → CLOSED
+                           ↓
+                       REOPENED → IN_PROGRESS
+```
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/tickets` | List tickets (QC users see QC-scope only) |
+| `POST` | `/api/tickets` | Create new ticket |
+| `GET` | `/api/tickets/:id` | Ticket detail with comments + evidence |
+| `PATCH` | `/api/tickets/:id` | Update status/priority/assignee (role-gated transitions) |
+| `POST` | `/api/tickets/:id/comments` | Add comment |
+| `POST` | `/api/tickets/:id/evidence` | Attach evidence (url + kind) |
+
+Frontend `TicketsPanel` is shared between Dev Console and Dashboard, filtered to QC scope for QC users.
+
+## MCP Server
+
+Local MCP server exposes the app to Claude Code for remote automation. Configured in `.mcp.json` (`app-mcp` + `playwright`).
+
+| Tool module | Purpose |
+|-------------|---------|
+| `tickets` | list, get, claim, comment, add_evidence, ready_for_qc, create, close, reopen, update |
+| `admin` | user management, presence, sessions |
+| `db` | Prisma query helpers |
+| `logs` | App + audit log access |
+| `code`, `project`, `dev` | Codebase introspection + editor integration |
+| `redis`, `presence`, `health` | Infra checks |
+
+- `MCP_SECRET` — grants readonly tools
+- `MCP_SECRET_ADMIN` — grants write + dev automation tools
+- Both empty = HTTP endpoint disabled
+
 ## WebSocket
 
 | Endpoint | Description |
@@ -184,7 +224,7 @@ SUPER_ADMIN-only endpoints:
 | **App Logs** | Redis List | Max 500 entries (LTRIM) | API requests, errors, auth events |
 | **Audit Logs** | PostgreSQL | Auto-cleanup > 90 days | LOGIN, LOGOUT, LOGIN_FAILED, ROLE_CHANGED, BLOCKED, etc. |
 
-Both can be viewed and manually cleared from the Dev Console (`/dev`).
+Both can be viewed and manually cleared from the Dev Console (`/dev`). Dev Console log views use client-side pagination (25 per page).
 
 ## Database Schema Visualization
 
@@ -250,6 +290,7 @@ All views use React Flow with auto-save positions and viewport per view.
 | Variable                   | Required | Description                                    |
 | -------------------------- | -------- | ---------------------------------------------- |
 | `DATABASE_URL`             | Yes      | PostgreSQL connection string                   |
+| `DIRECT_URL`               | No       | Direct PostgreSQL URL (bypasses pooler)        |
 | `REDIS_URL`                | Yes      | Redis connection string                        |
 | `GOOGLE_CLIENT_ID`         | Yes      | Google OAuth client ID                         |
 | `GOOGLE_CLIENT_SECRET`     | Yes      | Google OAuth client secret                     |
@@ -257,3 +298,7 @@ All views use React Flow with auto-save positions and viewport per view.
 | `AUDIT_LOG_RETENTION_DAYS` | No       | Days to keep audit logs (default: 90)          |
 | `PORT`                     | No       | Server port (default: 3000)                    |
 | `REACT_EDITOR`             | No       | Editor for click-to-source (default: code)     |
+| `MCP_SECRET`               | No       | Grants readonly MCP tools (HTTP `POST /mcp`)   |
+| `MCP_SECRET_ADMIN`         | No       | Grants write + dev automation MCP tools        |
+| `TELEGRAM_NOTIFY_TOKEN`    | No       | Bot token for task-done notifications          |
+| `TELEGRAM_NOTIFY_CHAT_ID`  | No       | Chat ID for Telegram notifications             |

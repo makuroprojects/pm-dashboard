@@ -19,8 +19,14 @@ Elysia.js as the HTTP framework, running on Bun. API routes are in `src/app.ts` 
 
 PostgreSQL via Prisma v6. Client generated to `./generated/prisma` (gitignored).
 
-- Schema: `prisma/schema.prisma` — User (id, name, email, password, role, blocked, timestamps) + Session (id, token, userId, expiresAt) + AuditLog (id, userId, action, detail, ip, createdAt)
-- Roles: `USER`, `ADMIN`, `SUPER_ADMIN` (enum). Default is `USER`.
+- Schema: `prisma/schema.prisma`
+  - `User` (id, name, email, password, role, blocked, timestamps)
+  - `Session` (id, token, userId, expiresAt)
+  - `AuditLog` (id, userId, action, detail, ip, createdAt)
+  - `Ticket` (id, title, description, status, priority, route, reporterId, assigneeId, timestamps, closedAt)
+  - `TicketComment` (id, ticketId, authorId, authorTag, body, createdAt)
+  - `TicketEvidence` (id, ticketId, kind, url, note, createdAt)
+- Enums: `Role` = `USER | QC | ADMIN | SUPER_ADMIN` (default `USER`); `TicketStatus` = `OPEN | IN_PROGRESS | READY_FOR_QC | REOPENED | CLOSED`; `TicketPriority` = `LOW | MEDIUM | HIGH | CRITICAL`
 - Client singleton: `src/lib/db.ts` — import `{ prisma }` from here
 - Seed: `prisma/seed.ts` — demo users (superadmin, admin, user) with `Bun.password.hash` bcrypt
 - Commands: `bun run db:migrate`, `bun run db:seed`, `bun run db:generate`
@@ -61,6 +67,28 @@ Session-based auth with HttpOnly cookies stored in DB.
 - `GET /api/admin/migrations` — Prisma migration timeline with parsed SQL changes and date info
 - `GET /api/admin/sessions` — all active sessions with user info, online status, expiry, role breakdown
 
+## Tickets API
+
+Role-gated ticket tracking. Status machine: `OPEN → IN_PROGRESS → READY_FOR_QC → CLOSED` with `REOPENED` branch. Allowed-transition helper enforces valid moves.
+
+- `GET /api/tickets` — list (QC users see only QC-scope tickets)
+- `POST /api/tickets` — create (any authed user reports)
+- `GET /api/tickets/:id` — detail with comments + evidence
+- `PATCH /api/tickets/:id` — update status/priority/assignee (role-gated)
+- `POST /api/tickets/:id/comments` — add comment
+- `POST /api/tickets/:id/evidence` — attach evidence (url + kind)
+
+Frontend: `src/frontend/components/TicketsPanel.tsx` — shared between `/dev` and `/dashboard`. Filtered to QC scope when user is QC.
+
+## MCP Server
+
+Local MCP server lets Claude drive the app remotely. `.mcp.json` registers `app-mcp` (runs `scripts/mcp/server.ts`) alongside `playwright`. Requires `MCP_SECRET`; `MCP_SECRET_ADMIN` unlocks write/dev tools.
+
+- Entry: `scripts/mcp/server.ts` + `scripts/mcp/test-client.ts`
+- Tool modules (`scripts/mcp/tools/`): `admin`, `code`, `db`, `dev`, `health`, `logs`, `presence`, `project`, `redis`, `tickets`, `shared`
+- Ticket tools: `list`, `get`, `claim`, `comment`, `add_evidence`, `ready_for_qc`, `create`, `close`, `reopen`, `update`
+- HTTP fallback: `POST /mcp` — readonly with `MCP_SECRET`, full with `MCP_SECRET_ADMIN`
+
 ## WebSocket
 
 - `WS /ws/presence` — real-time user presence. Authenticates via session cookie. Tracks connections in-memory (`src/lib/presence.ts`). Broadcasts online user list to admin subscribers on connect/disconnect.
@@ -71,6 +99,7 @@ Two log systems:
 
 - **App Logs** (`src/lib/applog.ts`) — Redis-backed ring buffer (500 entries). Logs API requests (via `onAfterResponse` hook), errors, auth events. Auto-rotates via `LTRIM`. Can be cleared manually.
 - **Audit Logs** (DB `AuditLog` table) — Persistent user activity trail. Actions: `LOGIN`, `LOGOUT`, `LOGIN_FAILED`, `LOGIN_BLOCKED`, `ROLE_CHANGED`, `BLOCKED`, `UNBLOCKED`. Auto-cleanup of records older than `AUDIT_LOG_RETENTION_DAYS` (default 90) runs on startup + every 24h. Can be cleared manually.
+- **Pagination** — Dev Console App Logs and User Logs use client-side pagination (25 per page). Avoids rendering hundreds of rows while polling every 5s. Page resets on filter change.
 
 ## Role-Based Routing
 
@@ -78,6 +107,7 @@ Two log systems:
 |------|--------------|------------|
 | SUPER_ADMIN | `/dev` | `/dev`, `/dashboard`, `/profile` |
 | ADMIN | `/dashboard` | `/dashboard`, `/profile` |
+| QC | `/dashboard` | `/dashboard` (QC-scoped tickets only), `/profile` |
 | USER | `/profile` | `/profile` |
 
 - `getDefaultRoute(role)` in `src/frontend/hooks/useAuth.ts` — centralized redirect logic
