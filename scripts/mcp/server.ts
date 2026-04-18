@@ -1,15 +1,20 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { adminTools } from './tools/admin'
+import { agentsTools, agentsReadonly } from './tools/agents'
 import { codeTools } from './tools/code'
 import { dbTools } from './tools/db'
 import { devTools } from './tools/dev'
+import { githubReadonly } from './tools/github'
 import { healthTools } from './tools/health'
 import { logsAdmin, logsReadonly } from './tools/logs'
+import { milestonesReadonly, milestonesTools } from './tools/milestones'
 import { presenceTools } from './tools/presence'
 import { projectTools } from './tools/project'
+import { projectsReadonly, projectsTools } from './tools/projects'
 import { redisTools } from './tools/redis'
-import { ticketTools } from './tools/tickets'
+import { tasksReadonly, tasksTools } from './tools/tasks'
+import { webhooksTools, webhooksReadonly } from './tools/webhooks'
 import type { McpScope, ToolModule } from './tools/shared'
 
 export type { McpScope }
@@ -21,6 +26,12 @@ const READONLY_MODULES: ToolModule[] = [
   healthTools,
   projectTools,
   codeTools,
+  agentsReadonly,
+  webhooksReadonly,
+  githubReadonly,
+  projectsReadonly,
+  tasksReadonly,
+  milestonesReadonly,
 ]
 
 const ADMIN_MODULES: ToolModule[] = [
@@ -29,13 +40,17 @@ const ADMIN_MODULES: ToolModule[] = [
   adminTools,
   devTools,
   redisTools,
-  ticketTools,
+  agentsTools,
+  webhooksTools,
+  projectsTools,
+  tasksTools,
+  milestonesTools,
 ]
 
 export function createMcpServer(scope: McpScope = 'admin'): McpServer {
   const server = new McpServer({
-    name: 'app-mcp',
-    version: '0.2.0',
+    name: 'pm-dashboard',
+    version: '0.3.0',
   })
 
   const modules = scope === 'admin' ? ADMIN_MODULES : READONLY_MODULES

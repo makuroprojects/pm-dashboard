@@ -23,10 +23,23 @@ PostgreSQL via Prisma v6. Client generated to `./generated/prisma` (gitignored).
   - `User` (id, name, email, password, role, blocked, timestamps)
   - `Session` (id, token, userId, expiresAt)
   - `AuditLog` (id, userId, action, detail, ip, createdAt)
-  - `Ticket` (id, title, description, status, priority, route, reporterId, assigneeId, timestamps, closedAt)
-  - `TicketComment` (id, ticketId, authorId, authorTag, body, createdAt)
-  - `TicketEvidence` (id, ticketId, kind, url, note, createdAt)
-- Enums: `Role` = `USER | QC | ADMIN | SUPER_ADMIN` (default `USER`); `TicketStatus` = `OPEN | IN_PROGRESS | READY_FOR_QC | REOPENED | CLOSED`; `TicketPriority` = `LOW | MEDIUM | HIGH | CRITICAL`
+  - `Agent` (id, agentId, hostname, osUser, status, claimedById, lastSeenAt, timestamps) — pm-watch ActivityWatch ingestion agent
+  - `ActivityEvent` (id, agentId, bucketId, eventId, timestamp, duration, data, createdAt) — raw AW events, unique per (agentId, bucketId, eventId)
+  - `WebhookToken` (id, name, tokenHash, tokenPrefix, status, expiresAt, lastUsedAt, createdById, timestamps) — DB-backed webhook auth tokens
+  - `WebhookRequestLog` (id, tokenId?, agentId?, statusCode, reason, ip, eventsIn, createdAt) — audit trail for `/webhooks/aw`
+  - `Project` (id, name, description, ownerId, status, priority, startsAt, endsAt, originalEndAt, archivedAt, githubRepo?, timestamps) — `githubRepo` unique, normalized `owner/repo`
+  - `ProjectGithubEvent` (id, projectId, kind, actorLogin, actorEmail?, matchedUserId?, title, url, sha?, prNumber?, metadata?, createdAt, ingestedAt) — unique per (projectId, kind, sha, prNumber)
+  - `GithubWebhookLog` (id, projectId?, deliveryId?, event, statusCode, reason?, ip?, eventsIn, createdAt) — audit trail for `/webhooks/github`
+  - `ProjectMember` (projectId, userId, role) — unique per (projectId, userId)
+  - `ProjectMilestone`, `ProjectExtension` — planning + audited deadline pushes
+  - `Task` (id, projectId, kind, title, description, status, priority, route?, reporterId, assigneeId?, startsAt?, dueAt?, estimateHours?, progressPercent?, closedAt?, timestamps)
+  - `Tag` (id, projectId, name, color) — unique per (projectId, name)
+  - `TaskTag` — m2m between Task and Tag
+  - `TaskDependency` (id, taskId, blockedById) — self-relation on Task via named relations `TaskDependents`/`TaskBlockers`; unique per (taskId, blockedById)
+  - `TaskChecklistItem` (id, taskId, title, done, order, timestamps)
+  - `TaskStatusChange` (id, taskId, authorId?, fromStatus, toStatus, createdAt) — written by PATCH /api/tasks/:id whenever status changes, used by activity timeline
+  - `TaskComment`, `TaskEvidence` — comments + attachments on tasks
+- Enums: `Role` = `USER | QC | ADMIN | SUPER_ADMIN` (default `USER`); `TaskKind` = `TASK | BUG | QC`; `TaskStatus` = `OPEN | IN_PROGRESS | READY_FOR_QC | REOPENED | CLOSED`; `TaskPriority` = `LOW | MEDIUM | HIGH | CRITICAL`; `AgentStatus` = `PENDING | APPROVED | REVOKED`; `WebhookTokenStatus` = `ACTIVE | DISABLED | REVOKED`; `GithubEventKind` = `PUSH_COMMIT | PR_OPENED | PR_CLOSED | PR_MERGED | PR_REVIEWED`
 - Client singleton: `src/lib/db.ts` — import `{ prisma }` from here
 - Seed: `prisma/seed.ts` — demo users (superadmin, admin, user) with `Bun.password.hash` bcrypt
 - Commands: `bun run db:migrate`, `bun run db:seed`, `bun run db:generate`
@@ -66,27 +79,65 @@ Session-based auth with HttpOnly cookies stored in DB.
 - `GET /api/admin/dependencies` — NPM packages from package.json with version, type (runtime/dev), category, importing files
 - `GET /api/admin/migrations` — Prisma migration timeline with parsed SQL changes and date info
 - `GET /api/admin/sessions` — all active sessions with user info, online status, expiry, role breakdown
+- `GET /api/admin/agents` — list pm-watch agents with claimedBy user + event counts
+- `POST /api/admin/agents/:id/approve` — approve PENDING agent and assign to a user
+- `POST /api/admin/agents/:id/revoke` — revoke APPROVED agent (events preserved, reversible)
+- `GET /api/admin/webhook-tokens` — list webhook tokens (hashes never returned)
+- `POST /api/admin/webhook-tokens` — create token (plaintext returned **once** only)
+- `PATCH /api/admin/webhook-tokens/:id` — toggle ACTIVE/DISABLED or rename
+- `POST /api/admin/webhook-tokens/:id/revoke` — permanently revoke token
+- `GET /api/admin/webhooks/stats` — aggregate stats (24h + 7d windows): total/success/fail/auth-fail/events, perToken, perAgent
+- `GET /api/admin/webhooks/logs?status=all|ok|fail|auth&limit=N` — recent webhook request logs with token/agent relations
 
-## Tickets API
+## pm-watch Integration
 
-Role-gated ticket tracking. Status machine: `OPEN → IN_PROGRESS → READY_FOR_QC → CLOSED` with `REOPENED` branch. Allowed-transition helper enforces valid moves.
+ActivityWatch agents push events to `/webhooks/aw` → events land in `ActivityEvent` table, attributed to the user assigned to the `Agent`.
 
-- `GET /api/tickets` — list (QC users see only QC-scope tickets)
-- `POST /api/tickets` — create (any authed user reports)
-- `GET /api/tickets/:id` — detail with comments + evidence
-- `PATCH /api/tickets/:id` — update status/priority/assignee (role-gated)
-- `POST /api/tickets/:id/comments` — add comment
-- `POST /api/tickets/:id/evidence` — attach evidence (url + kind)
+- **Webhook endpoint**: `POST /webhooks/aw` — accepts `{ agentId, hostname, osUser, events: [{ bucketId, eventId, timestamp, duration, data }] }`. Upserts agent on first contact (status `PENDING`). Rejects events until approved. Deduped via unique `(agentId, bucketId, eventId)`.
+- **Batch cap**: `PMW_EVENT_BATCH_MAX` (default 500) — returns 413 on overflow
+- **Auth**: DB-backed `WebhookToken` (SHA-256 hash). Falls back to `PMW_WEBHOOK_TOKEN` env var when no DB tokens are active. Revoked/expired/disabled tokens → 403 with reason.
+- **Token lifecycle**: create → plaintext shown ONCE → store in agent config. Toggle ACTIVE/DISABLED anytime. Revoke is permanent.
+- **Request logging**: every call (success or failure) writes a `WebhookRequestLog` row with `tokenId`, `agentId`, `statusCode`, `reason`, `eventsIn`. Retention `WEBHOOK_LOG_RETENTION_DAYS` (default 7), auto-cleanup on startup + every 24h.
+- **Helpers**: `src/lib/webhook-tokens.ts` — `hashToken()`, `verifyToken()`, `generateToken()` (`whk_` prefix + random hex). Verify result includes `tokenId` on failure for attribution.
 
-Frontend: `src/frontend/components/TicketsPanel.tsx` — shared between `/dev` and `/dashboard`. Filtered to QC scope when user is QC.
+### Frontend pm-watch panels
+
+- `src/frontend/components/AgentsPanel.tsx` — agent approval dashboard. Stats cards (pending/live/offline/events ingested), pending-approval alert banner, live-indicator dots (teal+pulse <5m, green <1h, gray stale, red revoked), inline Approve CTA on PENDING rows, approve modal with info card + user Select (confirm button disabled until user picked), revoke modal with consequences list, agent-ID tooltip + copy. Auto-refresh 15s.
+- `src/frontend/components/WebhookTokensPanel.tsx` — token CRUD with show-once creation flow, expiry presets (never/7d/30d/90d/1yr).
+- `src/frontend/components/WebhookMonitorPanel.tsx` — webhook activity monitor. 5 summary cards (requests/success+rate/failures/auth-fails/events over 24h), top tokens + top agents tables, recent-requests table with All/Success/Failures/Auth-fails filter. Auto-refresh 10s.
+
+All three mount as `/dev` sidebar tabs (`Agents`, `Webhook Tokens`, `Webhook Monitor`).
+
+## GitHub Integration
+
+Projects can be linked 1:1 to a GitHub repo via `Project.githubRepo` (stored canonical `owner/repo`). GitHub pushes/PRs/reviews flow in via webhook and are surfaced as project-level activity without requiring commit-message conventions.
+
+- **Schema**:
+  - `Project.githubRepo String? @unique` — normalized `owner/repo`, null until linked.
+  - `ProjectGithubEvent` (id, projectId, kind, actorLogin, actorEmail?, matchedUserId?, title, url, sha?, prNumber?, metadata?, createdAt, ingestedAt). Unique on `(projectId, kind, sha, prNumber)` for dedup across webhook redeliveries.
+  - `GithubWebhookLog` (id, projectId?, deliveryId?, event, statusCode, reason?, ip?, eventsIn, createdAt) — audit trail.
+  - Enum `GithubEventKind = PUSH_COMMIT | PR_OPENED | PR_CLOSED | PR_MERGED | PR_REVIEWED`.
+- **Webhook endpoint**: `POST /webhooks/github` — HMAC-SHA256 verified via `X-Hub-Signature-256` against `GITHUB_WEBHOOK_SECRET` (shared across all repos). `ping` → 200 pong. `push` → one `PUSH_COMMIT` per commit. `pull_request` → `PR_OPENED` / `PR_CLOSED` / `PR_MERGED` depending on action+merged. `pull_request_review` → `PR_REVIEWED`. 404 if repo not linked to any project. Returns `{ ok, event, received, inserted }`.
+- **User attribution**: commit author `email` is matched to `User.email` → `ProjectGithubEvent.matchedUserId` populated on insert (batch query). Null otherwise.
+- **Open PR derivation**: GitHub doesn't send "still open" events, so open PR count = set-difference of `PR_OPENED.prNumber` minus union of `PR_CLOSED.prNumber` + `PR_MERGED.prNumber`.
+- **Helpers**: `src/lib/github.ts` — `normalizeGithubRepo(input)` (accepts https URL, git SSH, `owner/repo`, with/without `.git`), `verifyGithubSignature(rawBody, header, secret)` (timing-safe).
+- **API**:
+  - `PATCH /api/projects/:id` accepts `githubRepo` (normalized server-side). `null` to unlink. 409 on duplicate link to another project.
+  - `GET /api/projects/:id/github/summary` — `{ linked, repo, stats: { commits7d, commits30d, contributors30d, openPrs, lastPushAt, lastPushBy }, contributors, openPrs, recent }`.
+  - `GET /api/projects/:id/github/feed?limit=N&kind=X` — paginated events with `matchedUser` joined.
+- **Frontend**:
+  - Settings tab (`ProjectDetailView.tsx` → `GithubIntegrationCard`) — repo URL input with normalize preview, link/update/unlink buttons, webhook setup hint (endpoint URL + `Copy URL` + direct link to `Settings/hooks/new`).
+  - Overview tab (`GithubActivityCard`) — 4 mini-stats (commits/7d, contributors/30d, open PRs, last push) + latest 10 events with per-kind badge colors. Empty state when repo not linked.
 
 ## MCP Server
 
-Local MCP server lets Claude drive the app remotely. `.mcp.json` registers `app-mcp` (runs `scripts/mcp/server.ts`) alongside `playwright`. Requires `MCP_SECRET`; `MCP_SECRET_ADMIN` unlocks write/dev tools.
+Local MCP server lets Claude drive the app remotely. `.mcp.json` registers `pm-dashboard` (runs `scripts/mcp/server.ts`) alongside `playwright`. Requires `MCP_SECRET`; `MCP_SECRET_ADMIN` unlocks write/dev tools.
 
 - Entry: `scripts/mcp/server.ts` + `scripts/mcp/test-client.ts`
-- Tool modules (`scripts/mcp/tools/`): `admin`, `code`, `db`, `dev`, `health`, `logs`, `presence`, `project`, `redis`, `tickets`, `shared`
-- Ticket tools: `list`, `get`, `claim`, `comment`, `add_evidence`, `ready_for_qc`, `create`, `close`, `reopen`, `update`
+- Tool modules (`scripts/mcp/tools/`): `admin`, `agents`, `code`, `db`, `dev`, `github`, `health`, `logs`, `presence`, `project`, `redis`, `webhooks`, `shared`
+- Agent tools: `agent_list`, `agent_get` (readonly); `agent_approve`, `agent_revoke`, `agent_reassign` (admin)
+- Webhook tools: `webhook_token_list`, `webhook_stats`, `webhook_logs` (readonly); `webhook_token_create` (returns plaintext once), `webhook_token_toggle`, `webhook_token_revoke` (admin)
+- GitHub tools (readonly): `github_summary`, `github_feed`, `github_webhook_logs` — all accept project id, name, or `owner/repo`
 - HTTP fallback: `POST /mcp` — readonly with `MCP_SECRET`, full with `MCP_SECRET_ADMIN`
 
 ## WebSocket
@@ -99,6 +150,7 @@ Two log systems:
 
 - **App Logs** (`src/lib/applog.ts`) — Redis-backed ring buffer (500 entries). Logs API requests (via `onAfterResponse` hook), errors, auth events. Auto-rotates via `LTRIM`. Can be cleared manually.
 - **Audit Logs** (DB `AuditLog` table) — Persistent user activity trail. Actions: `LOGIN`, `LOGOUT`, `LOGIN_FAILED`, `LOGIN_BLOCKED`, `ROLE_CHANGED`, `BLOCKED`, `UNBLOCKED`. Auto-cleanup of records older than `AUDIT_LOG_RETENTION_DAYS` (default 90) runs on startup + every 24h. Can be cleared manually.
+- **Webhook Request Logs** (DB `WebhookRequestLog` table) — Audit trail for `/webhooks/aw`. Every request logs `tokenId`, `agentId`, `statusCode`, `reason`, `eventsIn`, `ip`. Auto-cleanup of records older than `WEBHOOK_LOG_RETENTION_DAYS` (default 7) on startup + every 24h.
 - **Pagination** — Dev Console App Logs and User Logs use client-side pagination (25 per page). Avoids rendering hundreds of rows while polling every 5s. Page resets on filter change.
 
 ## Role-Based Routing
@@ -107,7 +159,7 @@ Two log systems:
 |------|--------------|------------|
 | SUPER_ADMIN | `/dev` | `/dev`, `/dashboard`, `/profile` |
 | ADMIN | `/dashboard` | `/dashboard`, `/profile` |
-| QC | `/dashboard` | `/dashboard` (QC-scoped tickets only), `/profile` |
+| QC | `/dashboard` | `/dashboard` (QC-scoped tasks only), `/profile` |
 | USER | `/profile` | `/profile` |
 
 - `getDefaultRoute(role)` in `src/frontend/hooks/useAuth.ts` — centralized redirect logic
@@ -124,7 +176,7 @@ React 19 + Vite 8 (middleware mode in dev). File-based routing with TanStack Rou
   - `__root.tsx` — Root layout (renders Outlet only, no floating UI)
   - `index.tsx` — Landing page (theme toggle top-right)
   - `login.tsx` — Login page (email/password + Google OAuth, theme toggle top-right)
-  - `dev.tsx` — Dev console with AppShell sidebar: Overview, Users, App Logs, User Logs, Database (React Flow ER diagram), Project (10 sub-views — all React Flow with auto-save), Settings (SUPER_ADMIN only)
+  - `dev.tsx` — Dev console with AppShell sidebar: Overview, Users, Agents, Webhook Tokens, Webhook Monitor, App Logs, User Logs, Database (React Flow ER diagram), Project (10 sub-views — all React Flow with auto-save), Settings (SUPER_ADMIN only)
   - `dashboard.tsx` — Admin dashboard with AppShell sidebar: Dashboard, Analytics, Orders, Messages, Calendar, Settings (ADMIN+)
   - `profile.tsx` — User profile (all authenticated users, theme toggle in header)
   - `blocked.tsx` — Blocked user page with explanation (theme toggle top-right)
@@ -166,6 +218,31 @@ React 19 + Vite 8 (middleware mode in dev). File-based routing with TanStack Rou
 - Each sub-view has independent auto-save (positions + viewport) via `useFlowAutoSave(key)` hook
 - All dynamic views have reload buttons. File nodes support double-click to open in editor.
 - Request broadcast: `onAfterResponse` hook sends `{ type: 'request', method, path, status, duration }` to admin WS subscribers via `broadcastToAdmins()` in `src/lib/presence.ts`
+
+## Projects + Tasks
+
+Projects and tasks are project-scoped; all write endpoints gate on `requireProjectMember`. Role hierarchy (inside a project): `OWNER > PM > MEMBER > VIEWER`. `SUPER_ADMIN` bypasses membership checks.
+
+- `GET /api/projects` — list projects visible to current user (owned or member of); counts and task stats
+- `POST /api/projects` — create (auto-adds creator as `OWNER`)
+- `GET /api/projects/:id` — full detail (members, milestones, extensions, recent tasks) + `myRole`
+- `PATCH /api/projects/:id` — update fields (OWNER/PM)
+- `DELETE /api/projects/:id` — permanent delete with cascade (OWNER or SUPER_ADMIN). Audited.
+- Project members, milestones, extensions — usual CRUD under `/api/projects/:id/*`
+- `GET/POST /api/projects/:id/tags` — list/create per-project tags; unique by (projectId, name)
+- `PATCH/DELETE /api/tags/:id` — rename/recolor or delete (cascades to TaskTag)
+- `GET /api/tasks` — list with filters (`projectId`, `status`, `kind`, `assigneeId`, `tagId`). Response enriches each task with `actualHours`, `progressPercent`, `tags`, counts for blockedBy/blocks/checklist.
+- `POST /api/tasks` — create, accepts `startsAt`, `dueAt`, `estimateHours`, `tagIds[]`
+- `GET /api/tasks/:id` — full detail incl. tags, blockedBy, blocks, checklist, statusChanges, comments, evidence + computed `actualHours`/`progressPercent`
+- `PATCH /api/tasks/:id` — updates (status writes `TaskStatusChange`). Accepts `tagIds` (replace set), `progressPercent`, `estimateHours`, dates.
+- `DELETE /api/tasks/:id` — OWNER/PM/SUPER_ADMIN
+- `POST /api/tasks/:id/comments`, `POST /api/tasks/:id/evidence` — add-only
+- `POST /api/tasks/:id/dependencies` (body: `blockedById`) / `DELETE /api/tasks/:id/dependencies/:blockedById`
+- `POST /api/tasks/:id/checklist`, `PATCH/DELETE /api/checklist/:id`
+
+Computed fields (not stored):
+- `actualHours` = `closedAt − (startsAt ?? createdAt)` in hours, rounded to 2dp. `null` until closed.
+- `progressPercent`: 100 if `CLOSED`; else ratio of checklist.done / checklist.length if checklist non-empty; else manual `progressPercent` column value.
 
 ## Dev Tools
 

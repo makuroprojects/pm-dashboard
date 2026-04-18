@@ -12,16 +12,8 @@ export interface User {
 }
 
 export function getDefaultRoute(role: Role): string {
-  switch (role) {
-    case 'SUPER_ADMIN':
-      return '/dev'
-    case 'ADMIN':
-      return '/dashboard'
-    case 'QC':
-      return '/dashboard'
-    default:
-      return '/profile'
-  }
+  if (role === 'SUPER_ADMIN' || role === 'ADMIN') return '/admin'
+  return '/pm'
 }
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {

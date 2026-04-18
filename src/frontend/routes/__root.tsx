@@ -1,6 +1,8 @@
 import type { QueryClient } from '@tanstack/react-query'
 import { createRootRouteWithContext, Outlet } from '@tanstack/react-router'
+import { CommandPalette } from '@/frontend/components/CommandPalette'
 import { ErrorPage } from '@/frontend/components/ErrorPage'
+import { GlobalTaskModal } from '@/frontend/components/GlobalTaskModal'
 import { NotFound } from '@/frontend/components/NotFound'
 
 interface RouterContext {
@@ -14,5 +16,11 @@ export const Route = createRootRouteWithContext<RouterContext>()({
 })
 
 function RootLayout() {
-  return <Outlet />
+  return (
+    <>
+      <Outlet />
+      <GlobalTaskModal />
+      <CommandPalette />
+    </>
+  )
 }

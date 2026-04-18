@@ -21,6 +21,10 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 # TanStack Router generated
 src/frontend/routeTree.gen.ts
+.tanstack/
+
+# uploads (user-generated files)
+uploads/
 
 # caches
 .eslintcache

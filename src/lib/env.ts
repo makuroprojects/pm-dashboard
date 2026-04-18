@@ -23,4 +23,10 @@ export const env = {
   AUDIT_LOG_RETENTION_DAYS: parseInt(optional('AUDIT_LOG_RETENTION_DAYS', '90'), 10),
   MCP_SECRET: optional('MCP_SECRET', ''),
   MCP_SECRET_ADMIN: optional('MCP_SECRET_ADMIN', ''),
+  PMW_WEBHOOK_TOKEN: optional('PMW_WEBHOOK_TOKEN', ''),
+  PMW_EVENT_BATCH_MAX: parseInt(optional('PMW_EVENT_BATCH_MAX', '500'), 10),
+  WEBHOOK_LOG_RETENTION_DAYS: parseInt(optional('WEBHOOK_LOG_RETENTION_DAYS', '7'), 10),
+  GITHUB_WEBHOOK_SECRET: optional('GITHUB_WEBHOOK_SECRET', ''),
+  UPLOADS_DIR: optional('UPLOADS_DIR', './uploads'),
+  UPLOAD_MAX_BYTES: parseInt(optional('UPLOAD_MAX_BYTES', String(10 * 1024 * 1024)), 10),
 } as const

@@ -14,6 +14,7 @@ Full-stack web application template built with Bun, Elysia, React 19, and Vite.
 - **Real-time**: WebSocket presence (Bun native)
 - **Dev Tools**: Click-to-source inspector (Ctrl+Shift+Cmd+C), HMR, Biome linter
 - **MCP**: Local MCP server (`scripts/mcp/*`) — lets Claude drive the app (tickets, admin, db, logs, dev)
+- **pm-watch Integration**: ActivityWatch agent approval + webhook token management + request monitoring
 - **Testing**: bun:test (unit + integration)
 
 ## Prerequisites
@@ -96,9 +97,13 @@ src/
     App.tsx           # Root component — MantineProvider, ModalsProvider, QueryClient, Router
     DevInspector.tsx  # Click-to-source overlay (dev only)
     components/
-      ThemeToggle.tsx # Shared dark/light mode toggle button
-      NotFound.tsx    # 404 page
-      ErrorPage.tsx   # Error boundary page
+      ThemeToggle.tsx         # Shared dark/light mode toggle button
+      NotFound.tsx            # 404 page
+      ErrorPage.tsx           # Error boundary page
+      TicketsPanel.tsx        # Shared ticket list (Dev + Dashboard, QC-scoped)
+      AgentsPanel.tsx         # pm-watch agent approval dashboard
+      WebhookTokensPanel.tsx  # Webhook token CRUD with show-once plaintext
+      WebhookMonitorPanel.tsx # Webhook activity monitor (24h/7d stats + logs)
     hooks/
       useAuth.ts     # useSession, useLogin, useLogout, getDefaultRoute
       usePresence.ts # WebSocket presence hook (real-time online status)
@@ -106,12 +111,12 @@ src/
       __root.tsx     # Root layout (Outlet only)
       index.tsx      # Landing page
       login.tsx      # Login page (email/password + Google OAuth)
-      dev.tsx        # Dev console — SUPER_ADMIN only (users, app logs, user logs, DB schema, project viz)
-      dashboard.tsx  # Admin dashboard — ADMIN & SUPER_ADMIN (stats, analytics, orders)
+      dev.tsx        # Dev console — SUPER_ADMIN (users, tickets, agents, tokens, monitor, logs, DB, project)
+      dashboard.tsx  # Admin dashboard — ADMIN/QC (tickets, analytics)
       profile.tsx    # User profile — all authenticated users
       blocked.tsx    # Blocked user info page
 prisma/
-  schema.prisma      # Database schema (User, Session, AuditLog, Role enum)
+  schema.prisma      # DB schema (User, Session, AuditLog, Ticket*, Agent, ActivityEvent, WebhookToken, WebhookRequestLog)
   seed.ts            # Seed script (superadmin, admin, user with bcrypt)
   migrations/        # Prisma migrations
 tests/
@@ -172,6 +177,15 @@ SUPER_ADMIN-only endpoints:
 | `GET` | `/api/admin/dependencies` | NPM packages graph (version, type, usage) |
 | `GET` | `/api/admin/migrations` | Prisma migration timeline (changes, SQL preview) |
 | `GET` | `/api/admin/sessions` | Active sessions with online status |
+| `GET` | `/api/admin/agents` | List pm-watch agents with claimedBy user + event counts |
+| `POST` | `/api/admin/agents/:id/approve` | Approve PENDING agent, assign to user |
+| `POST` | `/api/admin/agents/:id/revoke` | Revoke APPROVED agent (reversible, events preserved) |
+| `GET` | `/api/admin/webhook-tokens` | List webhook tokens (hashes never returned) |
+| `POST` | `/api/admin/webhook-tokens` | Create token (plaintext shown **once** only) |
+| `PATCH` | `/api/admin/webhook-tokens/:id` | Toggle ACTIVE/DISABLED or rename |
+| `POST` | `/api/admin/webhook-tokens/:id/revoke` | Permanently revoke token |
+| `GET` | `/api/admin/webhooks/stats` | Aggregate stats 24h/7d + perToken + perAgent |
+| `GET` | `/api/admin/webhooks/logs` | Recent request logs (filter: status) |
 
 ## Tickets
 
@@ -194,14 +208,44 @@ OPEN → IN_PROGRESS → READY_FOR_QC → CLOSED
 
 Frontend `TicketsPanel` is shared between Dev Console and Dashboard, filtered to QC scope for QC users.
 
+## pm-watch Integration
+
+ActivityWatch agents push events to `/webhooks/aw` → stored in `ActivityEvent` and attributed to the user assigned to the `Agent`.
+
+### Webhook flow
+
+```
+AW agent ──POST /webhooks/aw──▶ verify token (DB WebhookToken or env fallback)
+                                ├─ unknown agentId  → upsert Agent status=PENDING (events rejected)
+                                ├─ PENDING/REVOKED  → 403
+                                └─ APPROVED         → insert events (dedupe via (agentId,bucketId,eventId))
+```
+
+- **Endpoint**: `POST /webhooks/aw` — accepts `{ agentId, hostname, osUser, events: [...] }`
+- **Batch cap**: `PMW_EVENT_BATCH_MAX` (default 500, returns 413 on overflow)
+- **Auth precedence**: DB-backed `WebhookToken` (SHA-256 hash) > `PMW_WEBHOOK_TOKEN` env fallback
+- **Agent lifecycle**: `PENDING` (first contact) → `APPROVED` (operator assigns user) → `REVOKED` (reversible)
+- **Token lifecycle**: create shows plaintext ONCE → `ACTIVE` ↔ `DISABLED` (toggle) → `REVOKED` (permanent)
+- **Request logging**: every call logs `WebhookRequestLog` (tokenId, agentId, statusCode, reason, eventsIn). Cleanup `WEBHOOK_LOG_RETENTION_DAYS` (default 7).
+
+### Dev Console tabs
+
+| Tab | Component | What it does |
+|-----|-----------|--------------|
+| **Agents** | `AgentsPanel.tsx` | Approve/revoke agents. Stats cards (pending/live/offline/events), pending-approval banner, live indicators (live <5m / recent <1h / stale / revoked), inline Approve CTA, disabled-confirm approve modal |
+| **Webhook Tokens** | `WebhookTokensPanel.tsx` | Token CRUD. Show-once plaintext on creation, expiry presets (never/7d/30d/90d/1yr), ACTIVE/DISABLED toggle, revoke |
+| **Webhook Monitor** | `WebhookMonitorPanel.tsx` | 24h/7d stats (requests/success+rate/failures/auth-fails/events), top tokens, top agents, recent-requests table with status filter |
+
 ## MCP Server
 
-Local MCP server exposes the app to Claude Code for remote automation. Configured in `.mcp.json` (`app-mcp` + `playwright`).
+Local MCP server exposes the app to Claude Code for remote automation. Configured in `.mcp.json` (`pm-dashboard` + `playwright`).
 
 | Tool module | Purpose |
 |-------------|---------|
 | `tickets` | list, get, claim, comment, add_evidence, ready_for_qc, create, close, reopen, update |
-| `admin` | user management, presence, sessions |
+| `agents` | pm-watch agent management — list, get (readonly); approve, revoke, reassign (admin) |
+| `webhooks` | Webhook token + monitoring — list tokens, stats, logs (readonly); create (plaintext once), toggle, revoke (admin) |
+| `admin` | User management, role/block, sessions |
 | `db` | Prisma query helpers |
 | `logs` | App + audit log access |
 | `code`, `project`, `dev` | Codebase introspection + editor integration |
@@ -223,8 +267,9 @@ Local MCP server exposes the app to Claude Code for remote automation. Configure
 |------|---------|----------|-------------|
 | **App Logs** | Redis List | Max 500 entries (LTRIM) | API requests, errors, auth events |
 | **Audit Logs** | PostgreSQL | Auto-cleanup > 90 days | LOGIN, LOGOUT, LOGIN_FAILED, ROLE_CHANGED, BLOCKED, etc. |
+| **Webhook Request Logs** | PostgreSQL | Auto-cleanup > 7 days | Every `/webhooks/aw` call (tokenId, agentId, status, reason, eventsIn) |
 
-Both can be viewed and manually cleared from the Dev Console (`/dev`). Dev Console log views use client-side pagination (25 per page).
+App + Audit logs can be viewed and manually cleared from the Dev Console (`/dev`). Dev Console log views use client-side pagination (25 per page). Webhook request logs surface in the **Webhook Monitor** tab.
 
 ## Database Schema Visualization
 
@@ -296,6 +341,9 @@ All views use React Flow with auto-save positions and viewport per view.
 | `GOOGLE_CLIENT_SECRET`     | Yes      | Google OAuth client secret                     |
 | `SUPER_ADMIN_EMAIL`        | No       | Comma-separated emails to auto-promote         |
 | `AUDIT_LOG_RETENTION_DAYS` | No       | Days to keep audit logs (default: 90)          |
+| `WEBHOOK_LOG_RETENTION_DAYS` | No     | Days to keep webhook request logs (default: 7) |
+| `PMW_WEBHOOK_TOKEN`        | No       | Fallback webhook auth when no DB tokens active |
+| `PMW_EVENT_BATCH_MAX`      | No       | Max events per webhook batch (default: 500)    |
 | `PORT`                     | No       | Server port (default: 3000)                    |
 | `REACT_EDITOR`             | No       | Editor for click-to-source (default: code)     |
 | `MCP_SECRET`               | No       | Grants readonly MCP tools (HTTP `POST /mcp`)   |

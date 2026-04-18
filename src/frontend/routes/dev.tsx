@@ -43,12 +43,15 @@ import '@xyflow/react/dist/style.css'
 import { modals } from '@mantine/modals'
 import {
   TbBug,
+  TbChartBar,
   TbChevronRight,
   TbCircleFilled,
   TbCode,
   TbDatabase,
+  TbDeviceDesktop,
   TbDots,
   TbFileText,
+  TbKey,
   TbLayoutDashboard,
   TbLayoutSidebarLeftCollapse,
   TbLayoutSidebarLeftExpand,
@@ -67,12 +70,26 @@ import {
   TbUsers,
   TbWifi,
 } from 'react-icons/tb'
+import { AgentsPanel } from '@/frontend/components/AgentsPanel'
+import { NotificationBell } from '@/frontend/components/NotificationBell'
 import { ThemeToggle } from '@/frontend/components/ThemeToggle'
-import { TicketsPanel } from '@/frontend/components/TicketsPanel'
+import { WebhookMonitorPanel } from '@/frontend/components/WebhookMonitorPanel'
+import { WebhookTokensPanel } from '@/frontend/components/WebhookTokensPanel'
 import { type Role, useLogout, useSession } from '@/frontend/hooks/useAuth'
 import { usePresence } from '@/frontend/hooks/usePresence'
 
-const validTabs = ['overview', 'users', 'tickets', 'app-logs', 'user-logs', 'database', 'project', 'settings'] as const
+const validTabs = [
+  'overview',
+  'users',
+  'agents',
+  'webhook-tokens',
+  'webhook-monitor',
+  'app-logs',
+  'user-logs',
+  'database',
+  'project',
+  'settings',
+] as const
 
 export const Route = createFileRoute('/dev')({
   validateSearch: (search: Record<string, unknown>) => ({
@@ -86,7 +103,10 @@ export const Route = createFileRoute('/dev')({
       })
       if (!data?.user) throw redirect({ to: '/login' })
       if (data.user.blocked) throw redirect({ to: '/blocked' })
-      if (data.user.role !== 'SUPER_ADMIN') throw redirect({ to: '/profile' })
+      if (data.user.role !== 'SUPER_ADMIN') {
+        if (data.user.role === 'ADMIN') throw redirect({ to: '/admin', search: { tab: 'overview' } })
+        throw redirect({ to: '/pm', search: { tab: 'overview' } })
+      }
     } catch (e) {
       if (e instanceof Error) throw redirect({ to: '/login' })
       throw e
@@ -107,7 +127,9 @@ interface AdminUser {
 const navItems = [
   { label: 'Overview', icon: TbLayoutDashboard, key: 'overview' },
   { label: 'Users', icon: TbUsers, key: 'users' },
-  { label: 'Tickets', icon: TbBug, key: 'tickets' },
+  { label: 'Agents', icon: TbDeviceDesktop, key: 'agents' },
+  { label: 'Webhook Tokens', icon: TbKey, key: 'webhook-tokens' },
+  { label: 'Webhook Monitor', icon: TbChartBar, key: 'webhook-monitor' },
   { label: 'App Logs', icon: TbServer, key: 'app-logs' },
   { label: 'User Logs', icon: TbUserSearch, key: 'user-logs' },
   { label: 'Database', icon: TbDatabase, key: 'database' },
@@ -165,6 +187,7 @@ function DevPage() {
               Dev Console
             </Text>
           </Group>
+          <NotificationBell size="md" />
         </Group>
       </AppShell.Header>
       <AppShell.Navbar p={collapsed ? 'xs' : 'md'}>
@@ -263,6 +286,7 @@ function DevPage() {
                   </div>
                 </Group>
                 <Group gap={4}>
+                  <NotificationBell size="md" />
                   <ThemeToggle size="sm" />
                   <Tooltip label="Logout">
                     <ActionIcon variant="subtle" color="red" onClick={confirmLogout} loading={logout.isPending}>
@@ -279,7 +303,9 @@ function DevPage() {
       <AppShell.Main>
         {active === 'overview' && <OverviewPanel />}
         {active === 'users' && <UsersPanel />}
-        {active === 'tickets' && <TicketsPanel />}
+        {active === 'agents' && <AgentsPanel />}
+        {active === 'webhook-tokens' && <WebhookTokensPanel />}
+        {active === 'webhook-monitor' && <WebhookMonitorPanel />}
         {active === 'app-logs' && <AppLogsPanel />}
         {active === 'user-logs' && <UserLogsPanel />}
         {active === 'database' && <DatabasePanel />}
@@ -1865,11 +1891,11 @@ function ApiRoutesFlowInner() {
       ['PAGE_/login', googleId, 'google'],
       [googleId, callbackId, 'redirect'],
       [callbackId, 'PAGE_/dev', 'SUPER_ADMIN'],
-      [callbackId, 'PAGE_/dashboard', 'ADMIN'],
-      [callbackId, 'PAGE_/profile', 'USER'],
+      [callbackId, 'PAGE_/admin', 'ADMIN'],
+      [callbackId, 'PAGE_/pm', 'USER / QC'],
       [loginId, 'PAGE_/dev', 'SUPER_ADMIN'],
-      [loginId, 'PAGE_/dashboard', 'ADMIN'],
-      [loginId, 'PAGE_/profile', 'USER'],
+      [loginId, 'PAGE_/admin', 'ADMIN'],
+      [loginId, 'PAGE_/pm', 'USER / QC'],
       [logoutId, 'PAGE_/login', 'redirect'],
       [sessionId, 'PAGE_/login', '401 redirect'],
     ]
@@ -2137,8 +2163,8 @@ function UserFlowViewInner() {
       n('blocked-check', 300, 370, 'Blocked?', { color: 'orange', type: 'decision' }),
       n('role-check', 300, 470, 'Role Check', { color: 'red', type: 'decision' }),
       n('dev', 100, 580, '/dev', { color: 'red', description: 'SUPER_ADMIN' }),
-      n('dashboard', 300, 580, '/dashboard', { color: 'orange', description: 'ADMIN+' }),
-      n('profile', 500, 580, '/profile', { color: 'blue', description: 'All users' }),
+      n('admin', 300, 580, '/admin', { color: 'orange', description: 'ADMIN+' }),
+      n('pm', 500, 580, '/pm', { color: 'blue', description: 'All users' }),
       n('blocked', 550, 370, '/blocked', { color: 'red', description: 'Logout only' }),
       n('logout', 550, 270, 'POST /api/auth/logout', { color: 'gray' }),
     ])
@@ -2151,8 +2177,8 @@ function UserFlowViewInner() {
       e('blocked-check', 'blocked', 'yes → blocked', 'red', 'right'),
       e('blocked-check', 'role-check', 'no'),
       e('role-check', 'dev', 'SUPER_ADMIN', 'red', 'left'),
-      e('role-check', 'dashboard', 'ADMIN', 'orange'),
-      e('role-check', 'profile', 'USER', 'blue', 'right'),
+      e('role-check', 'admin', 'ADMIN', 'orange'),
+      e('role-check', 'pm', 'USER / QC', 'blue', 'right'),
       e('dev', 'dashboard', 'can access', 'gray'),
       e('dashboard', 'profile', 'can access', 'gray'),
       e('blocked', 'logout', 'logout only', 'gray'),
@@ -2167,10 +2193,10 @@ function UserFlowViewInner() {
           SUPER_ADMIN → /dev
         </Badge>
         <Badge size="sm" color="orange" variant="light">
-          ADMIN → /dashboard
+          ADMIN → /admin
         </Badge>
         <Badge size="sm" color="blue" variant="light">
-          USER → /profile
+          USER / QC → /pm
         </Badge>
         <Badge size="sm" color="gray" variant="light">
           Blocked → /blocked
@@ -3281,9 +3307,10 @@ function SessionsFlowInner() {
 
     // Role nodes
     const roles: { role: string; color: string; routes: string[] }[] = [
-      { role: 'SUPER_ADMIN', color: 'red', routes: ['/dev', '/dashboard', '/profile'] },
-      { role: 'ADMIN', color: 'orange', routes: ['/dashboard', '/profile'] },
-      { role: 'USER', color: 'blue', routes: ['/profile'] },
+      { role: 'SUPER_ADMIN', color: 'red', routes: ['/dev', '/admin', '/pm', '/settings'] },
+      { role: 'ADMIN', color: 'orange', routes: ['/admin', '/pm', '/settings'] },
+      { role: 'QC', color: 'teal', routes: ['/pm', '/settings'] },
+      { role: 'USER', color: 'blue', routes: ['/pm', '/settings'] },
     ]
 
     roles.forEach((r, i) => {

@@ -15,7 +15,47 @@ enum Role {
   SUPER_ADMIN
 }
 
-enum TicketStatus {
+enum AgentStatus {
+  PENDING
+  APPROVED
+  REVOKED
+}
+
+enum WebhookTokenStatus {
+  ACTIVE
+  DISABLED
+  REVOKED
+}
+
+enum ProjectMemberRole {
+  OWNER
+  PM
+  MEMBER
+  VIEWER
+}
+
+enum ProjectStatus {
+  DRAFT
+  ACTIVE
+  ON_HOLD
+  COMPLETED
+  CANCELLED
+}
+
+enum ProjectPriority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum TaskKind {
+  TASK
+  BUG
+  QC
+}
+
+enum TaskStatus {
   OPEN
   IN_PROGRESS
   READY_FOR_QC
@@ -23,11 +63,28 @@ enum TicketStatus {
   CLOSED
 }
 
-enum TicketPriority {
+enum TaskPriority {
   LOW
   MEDIUM
   HIGH
   CRITICAL
+}
+
+enum NotificationKind {
+  TASK_ASSIGNED
+  TASK_COMMENTED
+  TASK_STATUS_CHANGED
+  TASK_DUE_SOON
+  TASK_OVERDUE
+  TASK_MENTIONED
+}
+
+enum GithubEventKind {
+  PUSH_COMMIT
+  PR_OPENED
+  PR_CLOSED
+  PR_MERGED
+  PR_REVIEWED
 }
 
 model User {
@@ -40,11 +97,20 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  sessions      Session[]
-  auditLogs     AuditLog[]
-  reported      Ticket[]        @relation("TicketReporter")
-  assigned      Ticket[]        @relation("TicketAssignee")
-  comments      TicketComment[]
+  sessions           Session[]
+  auditLogs          AuditLog[]
+  agents             Agent[]
+  webhookTokens      WebhookToken[]
+  ownedProjects      Project[]       @relation("ProjectOwner")
+  projectMemberships ProjectMember[]
+  projectExtensions  ProjectExtension[] @relation("ProjectExtensionAuthor")
+  reportedTasks      Task[]          @relation("TaskReporter")
+  assignedTasks      Task[]          @relation("TaskAssignee")
+  taskComments       TaskComment[]   @relation("TaskCommentAuthor")
+  taskStatusChanges  TaskStatusChange[] @relation("TaskStatusChangeAuthor")
+  notifications      Notification[]     @relation("NotificationRecipient")
+  triggeredNotifications Notification[] @relation("NotificationActor")
+  matchedGithubEvents    ProjectGithubEvent[] @relation("GithubEventMatchedUser")
 
   @@map("user")
 }
@@ -78,56 +144,368 @@ model AuditLog {
   @@map("audit_log")
 }
 
-model Ticket {
-  id          String         @id @default(uuid())
-  title       String
-  description String
-  status      TicketStatus   @default(OPEN)
-  priority    TicketPriority @default(MEDIUM)
-  route       String?
-  reporterId  String
-  assigneeId  String?
-  createdAt   DateTime       @default(now())
-  updatedAt   DateTime       @updatedAt
-  closedAt    DateTime?
+model Agent {
+  id          String      @id @default(uuid())
+  agentId     String      @unique
+  hostname    String
+  osUser      String
+  status      AgentStatus @default(PENDING)
+  claimedById String?
+  lastSeenAt  DateTime?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
 
-  reporter User             @relation("TicketReporter", fields: [reporterId], references: [id], onDelete: Cascade)
-  assignee User?            @relation("TicketAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
-  comments TicketComment[]
-  evidence TicketEvidence[]
+  claimedBy   User?               @relation(fields: [claimedById], references: [id], onDelete: SetNull)
+  events      ActivityEvent[]
+  requestLogs WebhookRequestLog[]
 
   @@index([status])
+  @@index([claimedById])
+  @@map("agent")
+}
+
+model ActivityEvent {
+  id        String   @id @default(uuid())
+  agentId   String
+  bucketId  String
+  eventId   Int
+  timestamp DateTime
+  duration  Float
+  data      Json
+  createdAt DateTime @default(now())
+
+  agent Agent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@unique([agentId, bucketId, eventId])
+  @@index([agentId])
+  @@index([timestamp])
+  @@index([bucketId])
+  @@map("activity_event")
+}
+
+model WebhookToken {
+  id          String             @id @default(uuid())
+  name        String
+  tokenHash   String             @unique
+  tokenPrefix String
+  status      WebhookTokenStatus @default(ACTIVE)
+  expiresAt   DateTime?
+  lastUsedAt  DateTime?
+  createdById String?
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  createdBy   User?               @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  requestLogs WebhookRequestLog[]
+
+  @@index([status])
+  @@index([createdById])
+  @@map("webhook_token")
+}
+
+model Project {
+  id             String          @id @default(uuid())
+  name           String
+  description    String?
+  ownerId        String
+  status         ProjectStatus   @default(ACTIVE)
+  priority       ProjectPriority @default(MEDIUM)
+  startsAt       DateTime?
+  endsAt         DateTime?
+  originalEndAt  DateTime?
+  archivedAt     DateTime?
+  githubRepo     String?         @unique
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  owner        User                 @relation("ProjectOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  members      ProjectMember[]
+  tasks        Task[]
+  extensions   ProjectExtension[]
+  milestones   ProjectMilestone[]
+  tags         Tag[]
+  githubEvents ProjectGithubEvent[]
+  githubLogs   GithubWebhookLog[]
+
+  @@index([ownerId])
+  @@index([archivedAt])
+  @@index([status])
+  @@index([endsAt])
+  @@map("project")
+}
+
+model ProjectMilestone {
+  id          String    @id @default(uuid())
+  projectId   String
+  title       String
+  description String?
+  dueAt       DateTime?
+  completedAt DateTime?
+  order       Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@index([dueAt])
+  @@map("project_milestone")
+}
+
+model ProjectExtension {
+  id            String    @id @default(uuid())
+  projectId     String
+  extendedById  String?
+  previousEndAt DateTime?
+  newEndAt      DateTime
+  reason        String?
+  createdAt     DateTime  @default(now())
+
+  project    Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  extendedBy User?   @relation("ProjectExtensionAuthor", fields: [extendedById], references: [id], onDelete: SetNull)
+
+  @@index([projectId])
+  @@index([createdAt])
+  @@map("project_extension")
+}
+
+model ProjectMember {
+  id        String            @id @default(uuid())
+  projectId String
+  userId    String
+  role      ProjectMemberRole @default(MEMBER)
+  joinedAt  DateTime          @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, userId])
+  @@index([userId])
+  @@map("project_member")
+}
+
+model Task {
+  id              String       @id @default(uuid())
+  projectId       String
+  kind            TaskKind     @default(TASK)
+  title           String
+  description     String
+  status          TaskStatus   @default(OPEN)
+  priority        TaskPriority @default(MEDIUM)
+  route           String?
+  reporterId      String
+  assigneeId      String?
+  startsAt        DateTime?
+  dueAt           DateTime?
+  estimateHours   Float?
+  progressPercent Int?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  closedAt        DateTime?
+
+  project       Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  reporter      User                @relation("TaskReporter", fields: [reporterId], references: [id], onDelete: Cascade)
+  assignee      User?               @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  comments      TaskComment[]
+  evidence      TaskEvidence[]
+  tags          TaskTag[]
+  blockedBy     TaskDependency[]    @relation("TaskDependents")
+  blocks        TaskDependency[]    @relation("TaskBlockers")
+  checklist     TaskChecklistItem[]
+  statusChanges TaskStatusChange[]
+
+  @@index([projectId])
+  @@index([status])
+  @@index([kind])
   @@index([reporterId])
   @@index([assigneeId])
   @@index([createdAt])
-  @@map("ticket")
+  @@map("task")
 }
 
-model TicketComment {
+model Tag {
   id        String   @id @default(uuid())
-  ticketId  String
+  projectId String
+  name      String
+  color     String   @default("blue")
+  createdAt DateTime @default(now())
+
+  project Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  tasks   TaskTag[]
+
+  @@unique([projectId, name])
+  @@index([projectId])
+  @@map("tag")
+}
+
+model TaskTag {
+  taskId String
+  tagId  String
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  tag  Tag  @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([taskId, tagId])
+  @@index([tagId])
+  @@map("task_tag")
+}
+
+model TaskDependency {
+  id           String   @id @default(uuid())
+  taskId       String
+  blockedById  String
+  createdAt    DateTime @default(now())
+
+  task      Task @relation("TaskDependents", fields: [taskId], references: [id], onDelete: Cascade)
+  blockedBy Task @relation("TaskBlockers", fields: [blockedById], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, blockedById])
+  @@index([taskId])
+  @@index([blockedById])
+  @@map("task_dependency")
+}
+
+model TaskChecklistItem {
+  id        String   @id @default(uuid())
+  taskId    String
+  title     String
+  done      Boolean  @default(false)
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId])
+  @@map("task_checklist_item")
+}
+
+model TaskStatusChange {
+  id         String     @id @default(uuid())
+  taskId     String
+  authorId   String?
+  fromStatus TaskStatus
+  toStatus   TaskStatus
+  createdAt  DateTime   @default(now())
+
+  task   Task  @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  author User? @relation("TaskStatusChangeAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([taskId])
+  @@index([createdAt])
+  @@map("task_status_change")
+}
+
+model TaskComment {
+  id        String   @id @default(uuid())
+  taskId    String
   authorId  String?
   authorTag String
   body      String
   createdAt DateTime @default(now())
 
-  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
-  author User?  @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  task   Task  @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  author User? @relation("TaskCommentAuthor", fields: [authorId], references: [id], onDelete: SetNull)
 
-  @@index([ticketId])
-  @@map("ticket_comment")
+  @@index([taskId])
+  @@map("task_comment")
 }
 
-model TicketEvidence {
+model TaskEvidence {
   id        String   @id @default(uuid())
-  ticketId  String
+  taskId    String
   kind      String
   url       String
   note      String?
   createdAt DateTime @default(now())
 
-  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
 
-  @@index([ticketId])
-  @@map("ticket_evidence")
+  @@index([taskId])
+  @@map("task_evidence")
+}
+
+model Notification {
+  id          String           @id @default(uuid())
+  recipientId String
+  actorId     String?
+  kind        NotificationKind
+  taskId      String?
+  projectId   String?
+  title       String
+  body        String?
+  readAt      DateTime?
+  createdAt   DateTime         @default(now())
+
+  recipient User  @relation("NotificationRecipient", fields: [recipientId], references: [id], onDelete: Cascade)
+  actor     User? @relation("NotificationActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([recipientId, readAt])
+  @@index([recipientId, createdAt])
+  @@index([taskId])
+  @@map("notification")
+}
+
+model WebhookRequestLog {
+  id         String   @id @default(uuid())
+  tokenId    String?
+  agentId    String?
+  statusCode Int
+  reason     String?
+  ip         String?
+  eventsIn   Int      @default(0)
+  createdAt  DateTime @default(now())
+
+  token WebhookToken? @relation(fields: [tokenId], references: [id], onDelete: SetNull)
+  agent Agent?        @relation(fields: [agentId], references: [id], onDelete: SetNull)
+
+  @@index([tokenId])
+  @@index([agentId])
+  @@index([createdAt])
+  @@index([statusCode])
+  @@map("webhook_request_log")
+}
+
+model ProjectGithubEvent {
+  id             String          @id @default(uuid())
+  projectId      String
+  kind           GithubEventKind
+  actorLogin     String
+  actorEmail     String?
+  matchedUserId  String?
+  title          String
+  url            String
+  sha            String?
+  prNumber       Int?
+  metadata       Json?
+  createdAt      DateTime
+  ingestedAt     DateTime        @default(now())
+
+  project       Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  matchedUser   User?   @relation("GithubEventMatchedUser", fields: [matchedUserId], references: [id], onDelete: SetNull)
+
+  @@unique([projectId, kind, sha, prNumber])
+  @@index([projectId, createdAt])
+  @@index([kind])
+  @@index([matchedUserId])
+  @@map("project_github_event")
+}
+
+model GithubWebhookLog {
+  id         String   @id @default(uuid())
+  projectId  String?
+  deliveryId String?
+  event      String
+  statusCode Int
+  reason     String?
+  ip         String?
+  eventsIn   Int      @default(0)
+  createdAt  DateTime @default(now())
+
+  project Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  @@index([projectId])
+  @@index([createdAt])
+  @@index([statusCode])
+  @@map("github_webhook_log")
 }

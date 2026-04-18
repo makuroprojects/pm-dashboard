@@ -6,8 +6,11 @@ import { createMcpServer, type McpScope } from '../scripts/mcp/server'
 import { appLog, clearAppLogs, getAppLogs } from './lib/applog'
 import { prisma } from './lib/db'
 import { env } from './lib/env'
+import { normalizeGithubRepo, verifyGithubSignature } from './lib/github'
+import { notifyTaskAssigned, notifyTaskCommented, notifyTaskStatusChanged } from './lib/notifications'
 import { addConnection, broadcastToAdmins, getOnlineUserIds, removeConnection } from './lib/presence'
 import { parseSchema } from './lib/schema-parser'
+import { generateWebhookToken, verifyWebhookToken } from './lib/webhook-tokens'
 
 function getIp(request: Request): string {
   return request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? request.headers.get('x-real-ip') ?? 'unknown'
@@ -29,22 +32,158 @@ async function requireAuth(request: Request): Promise<{ userId: string; role: st
   return { userId: session.user.id, role: session.user.role, email: session.user.email }
 }
 
-function getAllowedStatusTransitions(current: string, role: 'QC' | 'ADMIN' | 'SUPER_ADMIN'): string[] {
-  const isQc = role === 'QC' || role === 'SUPER_ADMIN'
-  const isAdmin = role === 'ADMIN' || role === 'SUPER_ADMIN'
-  const matrix: Record<string, { qc: string[]; admin: string[] }> = {
-    OPEN: { qc: ['CLOSED'], admin: ['IN_PROGRESS'] },
-    IN_PROGRESS: { qc: ['CLOSED'], admin: ['READY_FOR_QC'] },
-    READY_FOR_QC: { qc: ['CLOSED', 'REOPENED'], admin: [] },
-    REOPENED: { qc: ['CLOSED'], admin: ['IN_PROGRESS'] },
-    CLOSED: { qc: ['REOPENED'], admin: [] },
+function getAllowedTaskTransitions(current: string, kind: 'TASK' | 'BUG' | 'QC'): string[] {
+  if (kind === 'TASK') {
+    const m: Record<string, string[]> = {
+      OPEN: ['IN_PROGRESS', 'CLOSED'],
+      IN_PROGRESS: ['OPEN', 'CLOSED'],
+      CLOSED: ['REOPENED'],
+      REOPENED: ['IN_PROGRESS', 'CLOSED'],
+      READY_FOR_QC: ['CLOSED', 'REOPENED'],
+    }
+    return m[current] ?? []
   }
-  const entry = matrix[current]
-  if (!entry) return []
-  const out = new Set<string>()
-  if (isQc) for (const s of entry.qc) out.add(s)
-  if (isAdmin) for (const s of entry.admin) out.add(s)
-  return [...out]
+  const m: Record<string, string[]> = {
+    OPEN: ['IN_PROGRESS', 'CLOSED'],
+    IN_PROGRESS: ['READY_FOR_QC', 'CLOSED'],
+    READY_FOR_QC: ['CLOSED', 'REOPENED'],
+    REOPENED: ['IN_PROGRESS', 'CLOSED'],
+    CLOSED: ['REOPENED'],
+  }
+  return m[current] ?? []
+}
+
+function computeActualHours(task: { startsAt: Date | null; createdAt: Date; closedAt: Date | null }): number | null {
+  if (!task.closedAt) return null
+  const start = (task.startsAt ?? task.createdAt).getTime()
+  const end = task.closedAt.getTime()
+  if (end <= start) return 0
+  return Math.round(((end - start) / 3_600_000) * 100) / 100
+}
+
+function computeProgressPercent(task: {
+  progressPercent: number | null
+  status: string
+  checklist?: { done: boolean }[]
+}): number | null {
+  if (task.status === 'CLOSED') return 100
+  if (task.checklist && task.checklist.length > 0) {
+    const done = task.checklist.filter((c) => c.done).length
+    return Math.round((done / task.checklist.length) * 100)
+  }
+  return task.progressPercent
+}
+
+interface TaskAwFocus {
+  focusHours: number
+  eventCount: number
+  windowStart: string
+  windowEnd: string
+  topApps: Array<{ app: string; seconds: number }>
+  topTitles: Array<{ app: string; title: string; seconds: number }>
+  matchKeywords: string[]
+  matchedHours: number | null
+}
+
+async function computeTaskAwFocus(task: {
+  id: string
+  title: string
+  route: string | null
+  assigneeId: string | null
+  startsAt: Date | null
+  createdAt: Date
+  closedAt: Date | null
+}): Promise<TaskAwFocus | null> {
+  if (!task.assigneeId) return null
+  const agents = await prisma.agent.findMany({
+    where: { claimedById: task.assigneeId, status: 'APPROVED' },
+    select: { id: true },
+  })
+  if (agents.length === 0) return null
+  const windowStart = task.startsAt ?? task.createdAt
+  const windowEnd = task.closedAt ?? new Date()
+  if (windowEnd.getTime() <= windowStart.getTime()) return null
+  const events = await prisma.activityEvent.findMany({
+    where: {
+      agentId: { in: agents.map((a) => a.id) },
+      timestamp: { gte: windowStart, lte: windowEnd },
+      bucketId: { startsWith: 'aw-watcher-window' },
+    },
+    select: { duration: true, data: true },
+    take: 20_000,
+  })
+  if (events.length === 0) {
+    return {
+      focusHours: 0,
+      eventCount: 0,
+      windowStart: windowStart.toISOString(),
+      windowEnd: windowEnd.toISOString(),
+      topApps: [],
+      topTitles: [],
+      matchKeywords: [],
+      matchedHours: null,
+    }
+  }
+  const keywords = Array.from(
+    new Set(
+      [task.title, task.route ?? '']
+        .join(' ')
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter((w) => w.length >= 4),
+    ),
+  ).slice(0, 12)
+  const appTotals = new Map<string, number>()
+  const titleTotals = new Map<string, { app: string; title: string; seconds: number }>()
+  let totalSeconds = 0
+  let matchedSeconds = 0
+  for (const e of events) {
+    const d = (e.data ?? {}) as Record<string, unknown>
+    const app = typeof d.app === 'string' ? d.app : null
+    const title = typeof d.title === 'string' ? d.title : null
+    if (!app) continue
+    totalSeconds += e.duration
+    appTotals.set(app, (appTotals.get(app) ?? 0) + e.duration)
+    if (title) {
+      const key = `${app}::${title}`
+      const cur = titleTotals.get(key) ?? { app, title, seconds: 0 }
+      cur.seconds += e.duration
+      titleTotals.set(key, cur)
+      if (keywords.length > 0) {
+        const haystack = `${app} ${title}`.toLowerCase()
+        if (keywords.some((k) => haystack.includes(k))) matchedSeconds += e.duration
+      }
+    }
+  }
+  const topApps = [...appTotals.entries()]
+    .map(([app, seconds]) => ({ app, seconds: Math.round(seconds) }))
+    .sort((a, b) => b.seconds - a.seconds)
+    .slice(0, 5)
+  const topTitles = [...titleTotals.values()]
+    .map((v) => ({ app: v.app, title: v.title, seconds: Math.round(v.seconds) }))
+    .sort((a, b) => b.seconds - a.seconds)
+    .slice(0, 5)
+  return {
+    focusHours: Math.round((totalSeconds / 3600) * 100) / 100,
+    eventCount: events.length,
+    windowStart: windowStart.toISOString(),
+    windowEnd: windowEnd.toISOString(),
+    topApps,
+    topTitles,
+    matchKeywords: keywords,
+    matchedHours: keywords.length > 0 ? Math.round((matchedSeconds / 3600) * 100) / 100 : null,
+  }
+}
+
+async function requireProjectMember(
+  projectId: string,
+  userId: string,
+): Promise<{ role: 'OWNER' | 'PM' | 'MEMBER' | 'VIEWER' } | null> {
+  const m = await prisma.projectMember.findUnique({
+    where: { projectId_userId: { projectId, userId } },
+    select: { role: true },
+  })
+  return m
 }
 
 export function createApp() {
@@ -247,7 +386,7 @@ export function createApp() {
         set.headers['set-cookie'] = `session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400`
         audit(user.id, 'LOGIN', 'via Google OAuth', ip)
         appLog('info', `Login (Google): ${googleUser.email} (${user.role})`, ip)
-        const defaultRoute = user.role === 'SUPER_ADMIN' ? '/dev' : user.role === 'ADMIN' ? '/dashboard' : '/profile'
+        const defaultRoute = user.role === 'SUPER_ADMIN' || user.role === 'ADMIN' ? '/admin' : '/pm'
         set.status = 302
         set.headers.location = defaultRoute
       })
@@ -560,17 +699,38 @@ export function createApp() {
           },
           {
             method: 'PAGE',
+            path: '/admin',
+            auth: 'admin',
+            category: 'frontend',
+            description: 'Admin console (ADMIN+)',
+          },
+          {
+            method: 'PAGE',
+            path: '/pm',
+            auth: 'authenticated',
+            category: 'frontend',
+            description: 'Project Manager (all authenticated)',
+          },
+          {
+            method: 'PAGE',
+            path: '/settings',
+            auth: 'authenticated',
+            category: 'frontend',
+            description: 'User settings (all authenticated)',
+          },
+          {
+            method: 'PAGE',
             path: '/dashboard',
             auth: 'admin',
             category: 'frontend',
-            description: 'Admin dashboard (ADMIN+)',
+            description: 'Legacy — redirects to /admin',
           },
           {
             method: 'PAGE',
             path: '/profile',
             auth: 'authenticated',
             category: 'frontend',
-            description: 'User profile (all authenticated)',
+            description: 'Legacy — redirects to /settings',
           },
           {
             method: 'PAGE',
@@ -728,48 +888,367 @@ export function createApp() {
             category: 'admin',
             description: 'Active sessions (live)',
           },
-          // Tickets
+          // pm-watch
+          {
+            method: 'POST',
+            path: '/webhooks/aw',
+            auth: 'bearer',
+            category: 'pm-watch',
+            description: 'ActivityWatch ingestion webhook (Bearer DB token or PMW_WEBHOOK_TOKEN fallback)',
+          },
           {
             method: 'GET',
-            path: '/api/tickets',
-            auth: 'qcOrAdmin',
-            category: 'tickets',
-            description: 'List tickets (filter: status, priority, assigneeId)',
+            path: '/api/me/agents',
+            auth: 'authenticated',
+            category: 'pm-watch',
+            description: "Current user's own approved pm-watch agents (device list)",
+          },
+          {
+            method: 'GET',
+            path: '/api/me/notifications',
+            auth: 'authenticated',
+            category: 'notifications',
+            description: 'List notifications for current user (query: ?limit=50&unread=1)',
+          },
+          {
+            method: 'GET',
+            path: '/api/me/notifications/unread-count',
+            auth: 'authenticated',
+            category: 'notifications',
+            description: 'Unread notification count for current user',
           },
           {
             method: 'POST',
-            path: '/api/tickets',
-            auth: 'qcOrAdmin',
-            category: 'tickets',
-            description: 'Create ticket (QC/ADMIN/SUPER_ADMIN)',
+            path: '/api/me/notifications/:id/read',
+            auth: 'authenticated',
+            category: 'notifications',
+            description: 'Mark a notification as read',
+          },
+          {
+            method: 'POST',
+            path: '/api/me/notifications/read-all',
+            auth: 'authenticated',
+            category: 'notifications',
+            description: 'Mark all notifications as read',
+          },
+          {
+            method: 'DELETE',
+            path: '/api/me/notifications/:id',
+            auth: 'authenticated',
+            category: 'notifications',
+            description: 'Delete a notification',
           },
           {
             method: 'GET',
-            path: '/api/tickets/:id',
-            auth: 'qcOrAdmin',
-            category: 'tickets',
-            description: 'Get ticket detail with comments and evidence',
+            path: '/api/admin/agents',
+            auth: 'superAdmin',
+            category: 'pm-watch',
+            description: 'List pm-watch agents (with claim + event counts)',
+          },
+          {
+            method: 'POST',
+            path: '/api/admin/agents/:id/approve',
+            auth: 'superAdmin',
+            category: 'pm-watch',
+            description: 'Approve agent and assign to user',
+          },
+          {
+            method: 'POST',
+            path: '/api/admin/agents/:id/revoke',
+            auth: 'superAdmin',
+            category: 'pm-watch',
+            description: 'Revoke agent (blocks future ingestion)',
+          },
+          {
+            method: 'GET',
+            path: '/api/admin/webhook-tokens',
+            auth: 'superAdmin',
+            category: 'pm-watch',
+            description: 'List webhook API tokens',
+          },
+          {
+            method: 'POST',
+            path: '/api/admin/webhook-tokens',
+            auth: 'superAdmin',
+            category: 'pm-watch',
+            description: 'Create webhook token (returns plaintext once)',
           },
           {
             method: 'PATCH',
-            path: '/api/tickets/:id',
-            auth: 'qcOrAdmin',
-            category: 'tickets',
-            description: 'Update ticket fields (role-based status transitions)',
+            path: '/api/admin/webhook-tokens/:id',
+            auth: 'superAdmin',
+            category: 'pm-watch',
+            description: 'Disable / enable / revoke webhook token',
+          },
+          {
+            method: 'DELETE',
+            path: '/api/admin/webhook-tokens/:id',
+            auth: 'superAdmin',
+            category: 'pm-watch',
+            description: 'Delete webhook token permanently',
+          },
+          {
+            method: 'GET',
+            path: '/api/admin/webhooks/stats',
+            auth: 'superAdmin',
+            category: 'pm-watch',
+            description: 'Webhook monitor: 24h/7d aggregates + per-token/per-agent hits',
+          },
+          {
+            method: 'GET',
+            path: '/api/admin/webhooks/logs',
+            auth: 'superAdmin',
+            category: 'pm-watch',
+            description: 'Webhook request log stream (filter: status=all|ok|fail|auth)',
+          },
+          // Users (for pickers)
+          {
+            method: 'GET',
+            path: '/api/users',
+            auth: 'authenticated',
+            category: 'users',
+            description: 'Lightweight user directory for member/assignee pickers',
+          },
+          // Projects
+          {
+            method: 'GET',
+            path: '/api/projects',
+            auth: 'authenticated',
+            category: 'projects',
+            description: 'List projects user is a member of',
           },
           {
             method: 'POST',
-            path: '/api/tickets/:id/comments',
-            auth: 'qcOrAdmin',
-            category: 'tickets',
-            description: 'Add comment to ticket',
+            path: '/api/projects',
+            auth: 'authenticated',
+            category: 'projects',
+            description: 'Create project (creator becomes OWNER)',
+          },
+          {
+            method: 'GET',
+            path: '/api/projects/:id',
+            auth: 'authenticated',
+            category: 'projects',
+            description: 'Project detail with members + task count (members only)',
+          },
+          {
+            method: 'PATCH',
+            path: '/api/projects/:id',
+            auth: 'authenticated',
+            category: 'projects',
+            description: 'Update project name/description/archived (OWNER or PM)',
+          },
+          {
+            method: 'DELETE',
+            path: '/api/projects/:id',
+            auth: 'authenticated',
+            category: 'projects',
+            description: 'Delete project permanently — cascades members/tasks/milestones (OWNER or SUPER_ADMIN)',
           },
           {
             method: 'POST',
-            path: '/api/tickets/:id/evidence',
-            auth: 'qcOrAdmin',
-            category: 'tickets',
-            description: 'Attach evidence (screenshot, commit, test log)',
+            path: '/api/projects/:id/members',
+            auth: 'authenticated',
+            category: 'projects',
+            description: 'Add member to project (OWNER or PM)',
+          },
+          {
+            method: 'DELETE',
+            path: '/api/projects/:id/members/:userId',
+            auth: 'authenticated',
+            category: 'projects',
+            description: 'Remove member (OWNER only)',
+          },
+          {
+            method: 'POST',
+            path: '/api/projects/:id/extend',
+            auth: 'authenticated',
+            category: 'projects',
+            description: 'Extend project deadline (creates audit trail, OWNER or PM)',
+          },
+          {
+            method: 'GET',
+            path: '/api/projects/:id/extensions',
+            auth: 'authenticated',
+            category: 'projects',
+            description: 'List deadline extension history (members only)',
+          },
+          {
+            method: 'GET',
+            path: '/api/milestones',
+            auth: 'authenticated',
+            category: 'projects',
+            description: 'List milestones across all projects user is a member of',
+          },
+          {
+            method: 'GET',
+            path: '/api/projects/:id/milestones',
+            auth: 'authenticated',
+            category: 'projects',
+            description: 'List project milestones (members only)',
+          },
+          {
+            method: 'POST',
+            path: '/api/projects/:id/milestones',
+            auth: 'authenticated',
+            category: 'projects',
+            description: 'Create milestone (OWNER or PM)',
+          },
+          {
+            method: 'PATCH',
+            path: '/api/milestones/:id',
+            auth: 'authenticated',
+            category: 'projects',
+            description: 'Update milestone or toggle completion (OWNER or PM)',
+          },
+          {
+            method: 'DELETE',
+            path: '/api/milestones/:id',
+            auth: 'authenticated',
+            category: 'projects',
+            description: 'Delete milestone (OWNER or PM)',
+          },
+          // Tasks
+          {
+            method: 'GET',
+            path: '/api/tasks',
+            auth: 'authenticated',
+            category: 'tasks',
+            description: 'List tasks (filter: projectId, status, kind, assigneeId, mine=1) — member scope',
+          },
+          {
+            method: 'POST',
+            path: '/api/tasks',
+            auth: 'authenticated',
+            category: 'tasks',
+            description: 'Create task in a project (member only)',
+          },
+          {
+            method: 'GET',
+            path: '/api/tasks/:id',
+            auth: 'authenticated',
+            category: 'tasks',
+            description: 'Task detail with comments + evidence (member only)',
+          },
+          {
+            method: 'PATCH',
+            path: '/api/tasks/:id',
+            auth: 'authenticated',
+            category: 'tasks',
+            description: 'Update task fields (member only; status transitions enforced)',
+          },
+          {
+            method: 'POST',
+            path: '/api/tasks/:id/comments',
+            auth: 'authenticated',
+            category: 'tasks',
+            description: 'Comment on task (member only)',
+          },
+          {
+            method: 'POST',
+            path: '/api/tasks/:id/evidence',
+            auth: 'authenticated',
+            category: 'tasks',
+            description: 'Attach evidence to task (member only)',
+          },
+          {
+            method: 'GET',
+            path: '/api/projects/:id/tags',
+            auth: 'authenticated',
+            category: 'tasks',
+            description: 'List project tags (member only)',
+          },
+          {
+            method: 'POST',
+            path: '/api/projects/:id/tags',
+            auth: 'authenticated',
+            category: 'tasks',
+            description: 'Create project tag (member with write access)',
+          },
+          {
+            method: 'PATCH',
+            path: '/api/tags/:id',
+            auth: 'authenticated',
+            category: 'tasks',
+            description: 'Rename/recolor tag (member with write access)',
+          },
+          {
+            method: 'DELETE',
+            path: '/api/tags/:id',
+            auth: 'authenticated',
+            category: 'tasks',
+            description: 'Delete tag (member with write access)',
+          },
+          {
+            method: 'POST',
+            path: '/api/tasks/:id/dependencies',
+            auth: 'authenticated',
+            category: 'tasks',
+            description: 'Add blocked-by dependency (same-project only)',
+          },
+          {
+            method: 'DELETE',
+            path: '/api/tasks/:id/dependencies/:blockedById',
+            auth: 'authenticated',
+            category: 'tasks',
+            description: 'Remove blocked-by dependency',
+          },
+          {
+            method: 'POST',
+            path: '/api/tasks/:id/checklist',
+            auth: 'authenticated',
+            category: 'tasks',
+            description: 'Add checklist item (member with write access)',
+          },
+          {
+            method: 'PATCH',
+            path: '/api/checklist/:id',
+            auth: 'authenticated',
+            category: 'tasks',
+            description: 'Toggle/rename checklist item',
+          },
+          {
+            method: 'DELETE',
+            path: '/api/checklist/:id',
+            auth: 'authenticated',
+            category: 'tasks',
+            description: 'Delete checklist item',
+          },
+          // Activity (pm-watch / AW)
+          {
+            method: 'GET',
+            path: '/api/activity',
+            auth: 'authenticated',
+            category: 'activity',
+            description: 'List my ActivityWatch events (filter: from, to, bucketId, agentId, limit)',
+          },
+          {
+            method: 'GET',
+            path: '/api/activity/summary',
+            auth: 'authenticated',
+            category: 'activity',
+            description: 'Aggregate stats for my AW events (today/week totals, top apps, top windows)',
+          },
+          {
+            method: 'GET',
+            path: '/api/activity/agents',
+            auth: 'authenticated',
+            category: 'activity',
+            description: 'List my approved pm-watch agents (used for filtering)',
+          },
+          {
+            method: 'GET',
+            path: '/api/activity/calendar',
+            auth: 'authenticated',
+            category: 'activity',
+            description: 'Per-day event counts & durations for a month (YYYY-MM) for calendar indicators',
+          },
+          {
+            method: 'GET',
+            path: '/api/activity/heatmap',
+            auth: 'authenticated',
+            category: 'activity',
+            description: 'Per-day activity aggregates for a full year (YYYY) — powers the yearly heatmap',
           },
           // Utility
           { method: 'GET', path: '/health', auth: 'public', category: 'utility', description: 'Health check' },
@@ -1065,6 +1544,14 @@ export function createApp() {
             default: '90',
             category: 'app',
             description: 'Days to keep audit logs',
+          },
+          {
+            name: 'WEBHOOK_LOG_RETENTION_DAYS',
+            envKey: 'WEBHOOK_LOG_RETENTION_DAYS',
+            required: false,
+            default: '7',
+            category: 'app',
+            description: 'Days to keep /webhooks/aw request logs',
           },
         ]
 
@@ -1486,52 +1973,771 @@ export function createApp() {
         }
       })
 
-      // ─── Tickets API ──────────────────────────────────
-      .get('/api/tickets', async ({ request, query, set }) => {
+      // ─── Projects API ─────────────────────────────────
+      .get('/api/users', async ({ request, set }) => {
         const auth = await requireAuth(request)
         if (!auth) {
           set.status = 401
           return { error: 'Unauthorized' }
         }
-        if (auth.role === 'USER') {
-          set.status = 403
-          return { error: 'Forbidden' }
-        }
+        const users = await prisma.user.findMany({
+          where: { blocked: false },
+          select: { id: true, name: true, email: true, role: true },
+          orderBy: { name: 'asc' },
+        })
+        return { users }
+      })
 
-        const where: Record<string, unknown> = {}
+      .get('/api/projects', async ({ request, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const memberships = await prisma.projectMember.findMany({
+          where: { userId: auth.userId },
+          include: {
+            project: {
+              include: {
+                owner: { select: { id: true, name: true, email: true } },
+                _count: { select: { members: true, tasks: true, milestones: true } },
+              },
+            },
+          },
+          orderBy: { joinedAt: 'desc' },
+        })
+        const projectIds = memberships.map((m) => m.projectId)
+        const grouped = projectIds.length
+          ? await prisma.task.groupBy({
+              by: ['projectId', 'status'],
+              where: { projectId: { in: projectIds } },
+              _count: { _all: true },
+            })
+          : []
+        const statsByProject = new Map<string, Record<string, number>>()
+        for (const g of grouped) {
+          const row = statsByProject.get(g.projectId) ?? {}
+          row[g.status] = g._count._all
+          statsByProject.set(g.projectId, row)
+        }
+        const milestonesDone = projectIds.length
+          ? await prisma.projectMilestone.groupBy({
+              by: ['projectId'],
+              where: { projectId: { in: projectIds }, completedAt: { not: null } },
+              _count: { _all: true },
+            })
+          : []
+        const doneByProject = new Map<string, number>(milestonesDone.map((m) => [m.projectId, m._count._all]))
+        return {
+          projects: memberships.map((m) => {
+            const s = statsByProject.get(m.projectId) ?? {}
+            return {
+              ...m.project,
+              myRole: m.role,
+              joinedAt: m.joinedAt,
+              taskStats: {
+                open: s.OPEN ?? 0,
+                inProgress: s.IN_PROGRESS ?? 0,
+                readyForQc: s.READY_FOR_QC ?? 0,
+                reopened: s.REOPENED ?? 0,
+                closed: s.CLOSED ?? 0,
+                total:
+                  (s.OPEN ?? 0) + (s.IN_PROGRESS ?? 0) + (s.READY_FOR_QC ?? 0) + (s.REOPENED ?? 0) + (s.CLOSED ?? 0),
+              },
+              milestoneStats: {
+                done: doneByProject.get(m.projectId) ?? 0,
+                total: m.project._count.milestones,
+              },
+            }
+          }),
+        }
+      })
+
+      .post('/api/projects', async ({ request, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const body = (await request.json()) as {
+          name?: string
+          description?: string
+          status?: 'DRAFT' | 'ACTIVE' | 'ON_HOLD' | 'COMPLETED' | 'CANCELLED'
+          priority?: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'
+          startsAt?: string | null
+          endsAt?: string | null
+        }
+        if (!body.name?.trim()) {
+          set.status = 400
+          return { error: 'name wajib diisi' }
+        }
+        const endsAt = body.endsAt ? new Date(body.endsAt) : null
+        const project = await prisma.project.create({
+          data: {
+            name: body.name.trim(),
+            description: body.description ?? null,
+            ownerId: auth.userId,
+            status: body.status ?? 'ACTIVE',
+            priority: body.priority ?? 'MEDIUM',
+            startsAt: body.startsAt ? new Date(body.startsAt) : null,
+            endsAt,
+            originalEndAt: endsAt,
+            members: { create: { userId: auth.userId, role: 'OWNER' } },
+          },
+          include: {
+            owner: { select: { id: true, name: true, email: true } },
+            _count: { select: { members: true, tasks: true } },
+          },
+        })
+        audit(auth.userId, 'PROJECT_CREATED', `${project.name} (${project.id})`, getIp(request))
+        appLog('info', `Project created: ${project.name} by ${auth.email}`)
+        return { project }
+      })
+
+      .get('/api/projects/:id', async ({ request, params, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const membership = await requireProjectMember(params.id, auth.userId)
+        if (!membership && auth.role !== 'SUPER_ADMIN') {
+          set.status = 403
+          return { error: 'Not a project member' }
+        }
+        const project = await prisma.project.findUnique({
+          where: { id: params.id },
+          include: {
+            owner: { select: { id: true, name: true, email: true } },
+            members: {
+              include: { user: { select: { id: true, name: true, email: true, role: true } } },
+              orderBy: { joinedAt: 'asc' },
+            },
+            _count: { select: { tasks: true } },
+          },
+        })
+        if (!project) {
+          set.status = 404
+          return { error: 'Project not found' }
+        }
+        const grouped = await prisma.task.groupBy({
+          by: ['status'],
+          where: { projectId: params.id },
+          _count: { _all: true },
+        })
+        const s: Record<string, number> = {}
+        for (const g of grouped) s[g.status] = g._count._all
+        const taskStats = {
+          open: s.OPEN ?? 0,
+          inProgress: s.IN_PROGRESS ?? 0,
+          readyForQc: s.READY_FOR_QC ?? 0,
+          reopened: s.REOPENED ?? 0,
+          closed: s.CLOSED ?? 0,
+          total: (s.OPEN ?? 0) + (s.IN_PROGRESS ?? 0) + (s.READY_FOR_QC ?? 0) + (s.REOPENED ?? 0) + (s.CLOSED ?? 0),
+        }
+        return { project: { ...project, taskStats }, myRole: membership?.role ?? null }
+      })
+
+      .patch('/api/projects/:id', async ({ request, params, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const membership = await requireProjectMember(params.id, auth.userId)
+        if (!membership || (membership.role !== 'OWNER' && membership.role !== 'PM')) {
+          set.status = 403
+          return { error: 'Only OWNER or PM can modify project' }
+        }
+        const body = (await request.json()) as {
+          name?: string
+          description?: string | null
+          status?: 'DRAFT' | 'ACTIVE' | 'ON_HOLD' | 'COMPLETED' | 'CANCELLED'
+          priority?: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'
+          startsAt?: string | null
+          endsAt?: string | null
+          archived?: boolean
+          githubRepo?: string | null
+        }
+        const existing = await prisma.project.findUnique({
+          where: { id: params.id },
+          select: { endsAt: true, originalEndAt: true },
+        })
+        if (!existing) {
+          set.status = 404
+          return { error: 'Project not found' }
+        }
+        const data: Record<string, unknown> = {}
+        if (body.name !== undefined) data.name = body.name
+        if (body.description !== undefined) data.description = body.description
+        if (body.status !== undefined) data.status = body.status
+        if (body.priority !== undefined) data.priority = body.priority
+        if (body.startsAt !== undefined) data.startsAt = body.startsAt ? new Date(body.startsAt) : null
+        if (body.endsAt !== undefined) {
+          const newEnd = body.endsAt ? new Date(body.endsAt) : null
+          data.endsAt = newEnd
+          if (existing.originalEndAt == null && newEnd != null) {
+            data.originalEndAt = newEnd
+          }
+        }
+        if (body.archived !== undefined) data.archivedAt = body.archived ? new Date() : null
+        if (body.githubRepo !== undefined) {
+          if (body.githubRepo === null || body.githubRepo === '') {
+            data.githubRepo = null
+          } else {
+            const normalized = normalizeGithubRepo(body.githubRepo)
+            if (!normalized) {
+              set.status = 400
+              return { error: 'Invalid GitHub repo — use owner/repo or full URL' }
+            }
+            data.githubRepo = normalized
+          }
+        }
+        try {
+          const project = await prisma.project.update({ where: { id: params.id }, data })
+          audit(auth.userId, 'PROJECT_UPDATED', `${project.id} ${Object.keys(data).join(',')}`, getIp(request))
+          return { project }
+        } catch (e) {
+          const err = e as { code?: string }
+          if (err.code === 'P2002') {
+            set.status = 409
+            return { error: 'This GitHub repo is already linked to another project' }
+          }
+          throw e
+        }
+      })
+
+      .delete('/api/projects/:id', async ({ request, params, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const me = await prisma.user.findUnique({ where: { id: auth.userId }, select: { role: true } })
+        const membership = await requireProjectMember(params.id, auth.userId)
+        const isOwner = membership?.role === 'OWNER'
+        const isSuperAdmin = me?.role === 'SUPER_ADMIN'
+        if (!isOwner && !isSuperAdmin) {
+          set.status = 403
+          return { error: 'Only the project OWNER or SUPER_ADMIN can delete a project' }
+        }
+        const project = await prisma.project.findUnique({ where: { id: params.id }, select: { id: true, name: true } })
+        if (!project) {
+          set.status = 404
+          return { error: 'Project not found' }
+        }
+        await prisma.project.delete({ where: { id: params.id } })
+        audit(auth.userId, 'PROJECT_DELETED', `${project.id} ${project.name}`, getIp(request))
+        return { ok: true }
+      })
+
+      .get('/api/projects/:id/github/summary', async ({ request, params, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const membership = await requireProjectMember(params.id, auth.userId)
+        if (!membership && auth.role !== 'SUPER_ADMIN') {
+          set.status = 403
+          return { error: 'Not a project member' }
+        }
+        const project = await prisma.project.findUnique({
+          where: { id: params.id },
+          select: { id: true, githubRepo: true },
+        })
+        if (!project) {
+          set.status = 404
+          return { error: 'Project not found' }
+        }
+        if (!project.githubRepo) {
+          return { linked: false, repo: null }
+        }
+        const now = Date.now()
+        const day = 24 * 3600 * 1000
+        const last7 = new Date(now - 7 * day)
+        const last30 = new Date(now - 30 * day)
+
+        const [commits7, commits30, contributors, openPrs, lastEvent, recentEvents, allPushes] = await Promise.all([
+          prisma.projectGithubEvent.count({
+            where: { projectId: params.id, kind: 'PUSH_COMMIT', createdAt: { gte: last7 } },
+          }),
+          prisma.projectGithubEvent.count({
+            where: { projectId: params.id, kind: 'PUSH_COMMIT', createdAt: { gte: last30 } },
+          }),
+          prisma.projectGithubEvent.groupBy({
+            by: ['actorLogin'],
+            where: { projectId: params.id, kind: 'PUSH_COMMIT', createdAt: { gte: last30 } },
+            _count: { _all: true },
+            orderBy: { _count: { actorLogin: 'desc' } },
+            take: 8,
+          }),
+          prisma.projectGithubEvent.findMany({
+            where: { projectId: params.id, kind: 'PR_OPENED' },
+            select: { prNumber: true, title: true, url: true, actorLogin: true, createdAt: true },
+            orderBy: { createdAt: 'desc' },
+            take: 30,
+          }),
+          prisma.projectGithubEvent.findFirst({
+            where: { projectId: params.id, kind: 'PUSH_COMMIT' },
+            orderBy: { createdAt: 'desc' },
+            select: { createdAt: true, actorLogin: true },
+          }),
+          prisma.projectGithubEvent.findMany({
+            where: { projectId: params.id },
+            orderBy: { createdAt: 'desc' },
+            take: 15,
+            include: { matchedUser: { select: { id: true, name: true, email: true } } },
+          }),
+          prisma.projectGithubEvent.findMany({
+            where: { projectId: params.id, kind: { in: ['PR_CLOSED', 'PR_MERGED'] } },
+            select: { prNumber: true },
+          }),
+        ])
+
+        const closedPrNums = new Set(allPushes.map((p) => p.prNumber).filter((n): n is number => n != null))
+        const openPrList = openPrs.filter((p) => p.prNumber != null && !closedPrNums.has(p.prNumber))
+
+        return {
+          linked: true,
+          repo: project.githubRepo,
+          stats: {
+            commits7d: commits7,
+            commits30d: commits30,
+            contributors30d: contributors.length,
+            openPrs: openPrList.length,
+            lastPushAt: lastEvent?.createdAt ?? null,
+            lastPushBy: lastEvent?.actorLogin ?? null,
+          },
+          contributors: contributors.map((c) => ({ login: c.actorLogin, commits: c._count._all })),
+          openPrs: openPrList.slice(0, 5),
+          recent: recentEvents,
+        }
+      })
+
+      .get('/api/projects/:id/github/feed', async ({ request, params, query, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const membership = await requireProjectMember(params.id, auth.userId)
+        if (!membership && auth.role !== 'SUPER_ADMIN') {
+          set.status = 403
+          return { error: 'Not a project member' }
+        }
+        const limit = Math.min(100, Math.max(1, parseInt((query.limit as string) ?? '50', 10) || 50))
+        const kindParam = typeof query.kind === 'string' ? query.kind.toUpperCase() : null
+        const validKinds = ['PUSH_COMMIT', 'PR_OPENED', 'PR_CLOSED', 'PR_MERGED', 'PR_REVIEWED'] as const
+        const kind = validKinds.includes(kindParam as (typeof validKinds)[number])
+          ? (kindParam as (typeof validKinds)[number])
+          : null
+        const events = await prisma.projectGithubEvent.findMany({
+          where: { projectId: params.id, ...(kind ? { kind } : {}) },
+          orderBy: { createdAt: 'desc' },
+          take: limit,
+          include: { matchedUser: { select: { id: true, name: true, email: true } } },
+        })
+        return { events }
+      })
+
+      .post('/api/projects/:id/members', async ({ request, params, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const membership = await requireProjectMember(params.id, auth.userId)
+        if (!membership || (membership.role !== 'OWNER' && membership.role !== 'PM')) {
+          set.status = 403
+          return { error: 'Only OWNER or PM can add members' }
+        }
+        const body = (await request.json()) as { userId?: string; role?: string }
+        if (!body.userId) {
+          set.status = 400
+          return { error: 'userId wajib diisi' }
+        }
+        const role = (body.role ?? 'MEMBER') as 'OWNER' | 'PM' | 'MEMBER' | 'VIEWER'
+        if (role === 'OWNER' && membership.role !== 'OWNER') {
+          set.status = 403
+          return { error: 'Only OWNER can grant OWNER role' }
+        }
+        const member = await prisma.projectMember.upsert({
+          where: { projectId_userId: { projectId: params.id, userId: body.userId } },
+          update: { role },
+          create: { projectId: params.id, userId: body.userId, role },
+          include: { user: { select: { id: true, name: true, email: true, role: true } } },
+        })
+        audit(auth.userId, 'PROJECT_MEMBER_ADDED', `${params.id} ← ${body.userId} (${role})`, getIp(request))
+        return { member }
+      })
+
+      .post('/api/projects/:id/extend', async ({ request, params, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const membership = await requireProjectMember(params.id, auth.userId)
+        if (!membership || (membership.role !== 'OWNER' && membership.role !== 'PM')) {
+          set.status = 403
+          return { error: 'Only OWNER or PM can extend deadline' }
+        }
+        const body = (await request.json()) as { newEndAt?: string; reason?: string }
+        if (!body.newEndAt) {
+          set.status = 400
+          return { error: 'newEndAt wajib diisi' }
+        }
+        const newEnd = new Date(body.newEndAt)
+        if (Number.isNaN(newEnd.getTime())) {
+          set.status = 400
+          return { error: 'newEndAt tidak valid' }
+        }
+        const existing = await prisma.project.findUnique({
+          where: { id: params.id },
+          select: { endsAt: true, originalEndAt: true, startsAt: true },
+        })
+        if (!existing) {
+          set.status = 404
+          return { error: 'Project not found' }
+        }
+        if (existing.startsAt && newEnd < existing.startsAt) {
+          set.status = 400
+          return { error: 'newEndAt must be after startsAt' }
+        }
+        if (existing.endsAt && newEnd.getTime() === existing.endsAt.getTime()) {
+          set.status = 400
+          return { error: 'newEndAt sama dengan deadline saat ini' }
+        }
+        const [extension, project] = await prisma.$transaction([
+          prisma.projectExtension.create({
+            data: {
+              projectId: params.id,
+              extendedById: auth.userId,
+              previousEndAt: existing.endsAt,
+              newEndAt: newEnd,
+              reason: body.reason?.trim() || null,
+            },
+            include: { extendedBy: { select: { id: true, name: true, email: true } } },
+          }),
+          prisma.project.update({
+            where: { id: params.id },
+            data: {
+              endsAt: newEnd,
+              originalEndAt: existing.originalEndAt ?? existing.endsAt ?? newEnd,
+            },
+          }),
+        ])
+        audit(
+          auth.userId,
+          'PROJECT_EXTENDED',
+          `${params.id} ${existing.endsAt?.toISOString() ?? 'null'} → ${newEnd.toISOString()}${body.reason ? ` (${body.reason})` : ''}`,
+          getIp(request),
+        )
+        return { extension, project }
+      })
+
+      .get('/api/projects/:id/extensions', async ({ request, params, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const membership = await requireProjectMember(params.id, auth.userId)
+        if (!membership && auth.role !== 'SUPER_ADMIN') {
+          set.status = 403
+          return { error: 'Not a project member' }
+        }
+        const extensions = await prisma.projectExtension.findMany({
+          where: { projectId: params.id },
+          include: { extendedBy: { select: { id: true, name: true, email: true } } },
+          orderBy: { createdAt: 'desc' },
+        })
+        return { extensions }
+      })
+
+      .get('/api/milestones', async ({ request, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const memberships = await prisma.projectMember.findMany({
+          where: { userId: auth.userId },
+          select: { projectId: true },
+        })
+        const projectIds = memberships.map((m) => m.projectId)
+        if (projectIds.length === 0) return { milestones: [] }
+        const milestones = await prisma.projectMilestone.findMany({
+          where: { projectId: { in: projectIds } },
+          orderBy: [{ order: 'asc' }, { dueAt: 'asc' }, { createdAt: 'asc' }],
+        })
+        return { milestones }
+      })
+
+      .get('/api/projects/:id/milestones', async ({ request, params, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const membership = await requireProjectMember(params.id, auth.userId)
+        if (!membership && auth.role !== 'SUPER_ADMIN') {
+          set.status = 403
+          return { error: 'Not a project member' }
+        }
+        const milestones = await prisma.projectMilestone.findMany({
+          where: { projectId: params.id },
+          orderBy: [{ order: 'asc' }, { dueAt: 'asc' }, { createdAt: 'asc' }],
+        })
+        return { milestones }
+      })
+
+      .post('/api/projects/:id/milestones', async ({ request, params, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const membership = await requireProjectMember(params.id, auth.userId)
+        if (!membership || (membership.role !== 'OWNER' && membership.role !== 'PM')) {
+          set.status = 403
+          return { error: 'Only OWNER or PM can create milestones' }
+        }
+        const body = (await request.json()) as {
+          title?: string
+          description?: string | null
+          dueAt?: string | null
+        }
+        if (!body.title?.trim()) {
+          set.status = 400
+          return { error: 'title wajib diisi' }
+        }
+        const last = await prisma.projectMilestone.findFirst({
+          where: { projectId: params.id },
+          orderBy: { order: 'desc' },
+          select: { order: true },
+        })
+        const milestone = await prisma.projectMilestone.create({
+          data: {
+            projectId: params.id,
+            title: body.title.trim(),
+            description: body.description?.trim() || null,
+            dueAt: body.dueAt ? new Date(body.dueAt) : null,
+            order: (last?.order ?? -1) + 1,
+          },
+        })
+        audit(auth.userId, 'MILESTONE_CREATED', `${params.id} ${milestone.title}`, getIp(request))
+        return { milestone }
+      })
+
+      .patch('/api/milestones/:id', async ({ request, params, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const existing = await prisma.projectMilestone.findUnique({
+          where: { id: params.id },
+          select: { projectId: true, completedAt: true },
+        })
+        if (!existing) {
+          set.status = 404
+          return { error: 'Milestone not found' }
+        }
+        const membership = await requireProjectMember(existing.projectId, auth.userId)
+        if (!membership || (membership.role !== 'OWNER' && membership.role !== 'PM')) {
+          set.status = 403
+          return { error: 'Only OWNER or PM can modify milestones' }
+        }
+        const body = (await request.json()) as {
+          title?: string
+          description?: string | null
+          dueAt?: string | null
+          completed?: boolean
+          order?: number
+        }
+        const data: Record<string, unknown> = {}
+        if (body.title !== undefined) data.title = body.title.trim()
+        if (body.description !== undefined) data.description = body.description?.trim() || null
+        if (body.dueAt !== undefined) data.dueAt = body.dueAt ? new Date(body.dueAt) : null
+        if (body.completed !== undefined) data.completedAt = body.completed ? new Date() : null
+        if (body.order !== undefined) data.order = body.order
+        const milestone = await prisma.projectMilestone.update({ where: { id: params.id }, data })
+        audit(
+          auth.userId,
+          'MILESTONE_UPDATED',
+          `${existing.projectId}/${params.id} ${Object.keys(data).join(',')}`,
+          getIp(request),
+        )
+        return { milestone }
+      })
+
+      .delete('/api/milestones/:id', async ({ request, params, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const existing = await prisma.projectMilestone.findUnique({
+          where: { id: params.id },
+          select: { projectId: true, title: true },
+        })
+        if (!existing) {
+          set.status = 404
+          return { error: 'Milestone not found' }
+        }
+        const membership = await requireProjectMember(existing.projectId, auth.userId)
+        if (!membership || (membership.role !== 'OWNER' && membership.role !== 'PM')) {
+          set.status = 403
+          return { error: 'Only OWNER or PM can delete milestones' }
+        }
+        await prisma.projectMilestone.delete({ where: { id: params.id } })
+        audit(auth.userId, 'MILESTONE_DELETED', `${existing.projectId}/${params.id} ${existing.title}`, getIp(request))
+        return { ok: true }
+      })
+
+      .delete('/api/projects/:id/members/:userId', async ({ request, params, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const membership = await requireProjectMember(params.id, auth.userId)
+        if (!membership || membership.role !== 'OWNER') {
+          set.status = 403
+          return { error: 'Only OWNER can remove members' }
+        }
+        const project = await prisma.project.findUnique({ where: { id: params.id }, select: { ownerId: true } })
+        if (project?.ownerId === params.userId) {
+          set.status = 400
+          return { error: 'Cannot remove the project owner' }
+        }
+        await prisma.projectMember.delete({
+          where: { projectId_userId: { projectId: params.id, userId: params.userId } },
+        })
+        audit(auth.userId, 'PROJECT_MEMBER_REMOVED', `${params.id} ← ${params.userId}`, getIp(request))
+        return { ok: true }
+      })
+
+      // ─── Tasks API ────────────────────────────────────
+      .get('/api/tasks', async ({ request, query, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const myProjectIds = (
+          await prisma.projectMember.findMany({ where: { userId: auth.userId }, select: { projectId: true } })
+        ).map((m) => m.projectId)
+        const where: Record<string, unknown> = { projectId: { in: myProjectIds } }
+        if (query.projectId) {
+          if (!myProjectIds.includes(String(query.projectId))) {
+            set.status = 403
+            return { error: 'Not a member of that project' }
+          }
+          where.projectId = String(query.projectId)
+        }
         if (query.status) where.status = String(query.status)
-        if (query.priority) where.priority = String(query.priority)
+        if (query.kind) where.kind = String(query.kind)
         if (query.assigneeId) where.assigneeId = String(query.assigneeId)
-        if (query.reporterId) where.reporterId = String(query.reporterId)
         if (query.mine === '1') where.assigneeId = auth.userId
 
-        const tickets = await prisma.ticket.findMany({
+        if (query.tagId) {
+          where.tags = { some: { tagId: String(query.tagId) } }
+        }
+        const tasks = await prisma.task.findMany({
           where,
           include: {
+            project: { select: { id: true, name: true } },
             reporter: { select: { id: true, name: true, email: true, role: true } },
             assignee: { select: { id: true, name: true, email: true, role: true } },
-            _count: { select: { comments: true, evidence: true } },
+            tags: { include: { tag: true } },
+            checklist: { select: { done: true } },
+            blockedBy: { select: { blockedById: true } },
+            _count: { select: { comments: true, evidence: true, blockedBy: true, blocks: true } },
           },
           orderBy: [{ status: 'asc' }, { createdAt: 'desc' }],
           take: Math.min(Number(query.limit) || 100, 500),
         })
-        return { tickets }
+        const enriched = tasks.map((t) => ({
+          ...t,
+          actualHours: computeActualHours(t),
+          progressPercent: computeProgressPercent(t),
+        }))
+        return { tasks: enriched }
       })
 
-      .get('/api/tickets/:id', async ({ request, params, set }) => {
+      .post('/api/tasks', async ({ request, set }) => {
         const auth = await requireAuth(request)
         if (!auth) {
           set.status = 401
           return { error: 'Unauthorized' }
         }
-        if (auth.role === 'USER') {
-          set.status = 403
-          return { error: 'Forbidden' }
+        const body = (await request.json()) as {
+          projectId?: string
+          kind?: string
+          title?: string
+          description?: string
+          priority?: string
+          route?: string
+          assigneeId?: string
+          startsAt?: string
+          dueAt?: string
+          estimateHours?: number
+          tagIds?: string[]
         }
+        if (!body.projectId || !body.title || !body.description) {
+          set.status = 400
+          return { error: 'projectId, title, description wajib diisi' }
+        }
+        const membership = await requireProjectMember(body.projectId, auth.userId)
+        if (!membership || membership.role === 'VIEWER') {
+          set.status = 403
+          return { error: 'Not a writable project member' }
+        }
+        const task = await prisma.task.create({
+          data: {
+            projectId: body.projectId,
+            kind: (body.kind as 'TASK' | 'BUG' | 'QC') ?? 'TASK',
+            title: body.title,
+            description: body.description,
+            priority: (body.priority as 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL') ?? 'MEDIUM',
+            route: body.route ?? null,
+            reporterId: auth.userId,
+            assigneeId: body.assigneeId ?? null,
+            startsAt: body.startsAt ? new Date(body.startsAt) : null,
+            dueAt: body.dueAt ? new Date(body.dueAt) : null,
+            estimateHours: typeof body.estimateHours === 'number' ? body.estimateHours : null,
+            tags: body.tagIds?.length ? { create: body.tagIds.map((tagId) => ({ tagId })) } : undefined,
+          },
+        })
+        audit(auth.userId, 'TASK_CREATED', `#${task.id} ${task.title}`, getIp(request))
+        appLog('info', `Task created: ${task.title} by ${auth.email}`)
+        if (task.assigneeId && task.assigneeId !== auth.userId) {
+          const actor = await prisma.user.findUnique({ where: { id: auth.userId }, select: { name: true } })
+          notifyTaskAssigned({
+            taskId: task.id,
+            projectId: task.projectId,
+            taskTitle: task.title,
+            assigneeId: task.assigneeId,
+            actorId: auth.userId,
+            actorName: actor?.name ?? 'Someone',
+          }).catch(() => {})
+        }
+        return { task }
+      })
 
-        const ticket = await prisma.ticket.findUnique({
+      .get('/api/tasks/:id', async ({ request, params, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const task = await prisma.task.findUnique({
           where: { id: params.id },
           include: {
+            project: { select: { id: true, name: true } },
             reporter: { select: { id: true, name: true, email: true, role: true } },
             assignee: { select: { id: true, name: true, email: true, role: true } },
             comments: {
@@ -1539,165 +2745,1671 @@ export function createApp() {
               orderBy: { createdAt: 'asc' },
             },
             evidence: { orderBy: { createdAt: 'asc' } },
+            tags: { include: { tag: true } },
+            blockedBy: {
+              include: {
+                blockedBy: {
+                  select: { id: true, title: true, status: true, kind: true },
+                },
+              },
+            },
+            blocks: {
+              include: {
+                task: {
+                  select: { id: true, title: true, status: true, kind: true },
+                },
+              },
+            },
+            checklist: { orderBy: [{ order: 'asc' }, { createdAt: 'asc' }] },
+            statusChanges: {
+              include: { author: { select: { id: true, name: true, email: true } } },
+              orderBy: { createdAt: 'asc' },
+            },
           },
         })
-        if (!ticket) {
+        if (!task) {
           set.status = 404
-          return { error: 'Ticket not found' }
+          return { error: 'Task not found' }
         }
-        return { ticket }
+        const membership = await requireProjectMember(task.projectId, auth.userId)
+        if (!membership && auth.role !== 'SUPER_ADMIN') {
+          set.status = 403
+          return { error: 'Not a project member' }
+        }
+        const actualHours = computeActualHours(task)
+        const progressPercent = computeProgressPercent(task)
+        const awFocus = await computeTaskAwFocus(task)
+        return { task: { ...task, actualHours, progressPercent, awFocus } }
       })
 
-      .post('/api/tickets', async ({ request, set }) => {
+      .patch('/api/tasks/:id', async ({ request, params, set }) => {
         const auth = await requireAuth(request)
         if (!auth) {
           set.status = 401
           return { error: 'Unauthorized' }
         }
-        if (!['QC', 'ADMIN', 'SUPER_ADMIN'].includes(auth.role)) {
-          set.status = 403
-          return { error: 'Hanya QC/ADMIN yang bisa membuat tiket' }
-        }
-        const body = (await request.json()) as {
-          title?: string
-          description?: string
-          priority?: string
-          route?: string
-          assigneeId?: string
-        }
-        if (!body.title || !body.description) {
-          set.status = 400
-          return { error: 'title dan description wajib diisi' }
-        }
-        const ticket = await prisma.ticket.create({
-          data: {
-            title: body.title,
-            description: body.description,
-            priority: (body.priority as 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL') ?? 'MEDIUM',
-            route: body.route ?? null,
-            reporterId: auth.userId,
-            assigneeId: body.assigneeId ?? null,
-          },
-        })
-        audit(auth.userId, 'TICKET_CREATED', `#${ticket.id} ${ticket.title}`, getIp(request))
-        appLog('info', `Ticket created: ${ticket.title} by ${auth.email}`)
-        return { ticket }
-      })
-
-      .patch('/api/tickets/:id', async ({ request, params, set }) => {
-        const auth = await requireAuth(request)
-        if (!auth) {
-          set.status = 401
-          return { error: 'Unauthorized' }
-        }
-        if (auth.role === 'USER') {
-          set.status = 403
-          return { error: 'Forbidden' }
-        }
-
-        const current = await prisma.ticket.findUnique({ where: { id: params.id } })
+        const current = await prisma.task.findUnique({ where: { id: params.id } })
         if (!current) {
           set.status = 404
-          return { error: 'Ticket not found' }
+          return { error: 'Task not found' }
         }
-
+        const membership = await requireProjectMember(current.projectId, auth.userId)
+        if (!membership || membership.role === 'VIEWER') {
+          set.status = 403
+          return { error: 'Not a writable project member' }
+        }
         const body = (await request.json()) as {
           title?: string
           description?: string
           priority?: string
+          kind?: string
           route?: string | null
           status?: string
           assigneeId?: string | null
+          startsAt?: string | null
+          dueAt?: string | null
+          estimateHours?: number | null
+          progressPercent?: number | null
+          tagIds?: string[]
         }
-
         const data: Record<string, unknown> = {}
-
         if (body.title !== undefined) data.title = body.title
         if (body.description !== undefined) data.description = body.description
         if (body.priority !== undefined) data.priority = body.priority
+        if (body.kind !== undefined) data.kind = body.kind
         if (body.route !== undefined) data.route = body.route
         if (body.assigneeId !== undefined) data.assigneeId = body.assigneeId
-
+        if (body.startsAt !== undefined) data.startsAt = body.startsAt ? new Date(body.startsAt) : null
+        if (body.dueAt !== undefined) data.dueAt = body.dueAt ? new Date(body.dueAt) : null
+        if (body.estimateHours !== undefined)
+          data.estimateHours = body.estimateHours === null ? null : Number(body.estimateHours)
+        if (body.progressPercent !== undefined) {
+          const p = body.progressPercent
+          data.progressPercent = p === null ? null : Math.max(0, Math.min(100, Math.round(p)))
+        }
+        let statusTransition: { from: string; to: string } | null = null
         if (body.status !== undefined) {
-          const allowed = getAllowedStatusTransitions(current.status, auth.role as 'QC' | 'ADMIN' | 'SUPER_ADMIN')
+          const allowed = getAllowedTaskTransitions(current.status, current.kind)
           if (!allowed.includes(body.status)) {
             set.status = 400
-            return {
-              error: `Transisi status tidak diizinkan untuk role ${auth.role}: ${current.status} → ${body.status}`,
-            }
+            return { error: `Invalid transition: ${current.status} → ${body.status} for ${current.kind}` }
+          }
+          if (body.status !== current.status) {
+            statusTransition = { from: current.status, to: body.status }
           }
           data.status = body.status
           if (body.status === 'CLOSED') data.closedAt = new Date()
           if (body.status === 'REOPENED') data.closedAt = null
         }
-
-        const ticket = await prisma.ticket.update({ where: { id: params.id }, data })
-        audit(auth.userId, 'TICKET_UPDATED', `#${ticket.id} ${Object.keys(data).join(',')}`, getIp(request))
-        return { ticket }
+        const task = await prisma.task.update({ where: { id: params.id }, data })
+        if (statusTransition) {
+          await prisma.taskStatusChange.create({
+            data: {
+              taskId: task.id,
+              authorId: auth.userId,
+              fromStatus: statusTransition.from as 'OPEN' | 'IN_PROGRESS' | 'READY_FOR_QC' | 'REOPENED' | 'CLOSED',
+              toStatus: statusTransition.to as 'OPEN' | 'IN_PROGRESS' | 'READY_FOR_QC' | 'REOPENED' | 'CLOSED',
+            },
+          })
+        }
+        if (body.tagIds !== undefined) {
+          await prisma.taskTag.deleteMany({ where: { taskId: task.id } })
+          if (body.tagIds.length) {
+            await prisma.taskTag.createMany({
+              data: body.tagIds.map((tagId) => ({ taskId: task.id, tagId })),
+              skipDuplicates: true,
+            })
+          }
+        }
+        audit(auth.userId, 'TASK_UPDATED', `#${task.id} ${Object.keys(data).join(',')}`, getIp(request))
+        const actor = await prisma.user.findUnique({ where: { id: auth.userId }, select: { name: true } })
+        const actorName = actor?.name ?? 'Someone'
+        if (
+          body.assigneeId !== undefined &&
+          body.assigneeId &&
+          body.assigneeId !== current.assigneeId &&
+          body.assigneeId !== auth.userId
+        ) {
+          notifyTaskAssigned({
+            taskId: task.id,
+            projectId: task.projectId,
+            taskTitle: task.title,
+            assigneeId: body.assigneeId,
+            actorId: auth.userId,
+            actorName,
+          }).catch(() => {})
+        }
+        if (statusTransition) {
+          notifyTaskStatusChanged({
+            taskId: task.id,
+            projectId: task.projectId,
+            taskTitle: task.title,
+            reporterId: current.reporterId,
+            assigneeId: task.assigneeId,
+            actorId: auth.userId,
+            actorName,
+            fromStatus: statusTransition.from,
+            toStatus: statusTransition.to,
+          }).catch(() => {})
+        }
+        return { task }
       })
 
-      .post('/api/tickets/:id/comments', async ({ request, params, set }) => {
+      .post('/api/tasks/:id/comments', async ({ request, params, set }) => {
         const auth = await requireAuth(request)
         if (!auth) {
           set.status = 401
           return { error: 'Unauthorized' }
         }
-        if (auth.role === 'USER') {
-          set.status = 403
-          return { error: 'Forbidden' }
-        }
-
-        const ticket = await prisma.ticket.findUnique({ where: { id: params.id }, select: { id: true } })
-        if (!ticket) {
+        const task = await prisma.task.findUnique({
+          where: { id: params.id },
+          select: { projectId: true, title: true, reporterId: true, assigneeId: true },
+        })
+        if (!task) {
           set.status = 404
-          return { error: 'Ticket not found' }
+          return { error: 'Task not found' }
         }
-
-        const { body } = (await request.json()) as { body?: string }
-        if (!body?.trim()) {
+        const membership = await requireProjectMember(task.projectId, auth.userId)
+        if (!membership || membership.role === 'VIEWER') {
+          set.status = 403
+          return { error: 'Not a writable project member' }
+        }
+        const { body: text } = (await request.json()) as { body?: string }
+        if (!text?.trim()) {
           set.status = 400
           return { error: 'body wajib diisi' }
         }
-
-        const comment = await prisma.ticketComment.create({
+        const comment = await prisma.taskComment.create({
           data: {
-            ticketId: params.id,
+            taskId: params.id,
             authorId: auth.userId,
-            authorTag: auth.role === 'QC' ? 'QC' : auth.role === 'ADMIN' ? 'ADMIN' : 'SUPER_ADMIN',
-            body,
+            authorTag: membership.role,
+            body: text,
           },
           include: { author: { select: { id: true, name: true, email: true, role: true } } },
         })
+        const snippet = text.trim().length > 120 ? `${text.trim().slice(0, 120)}…` : text.trim()
+        notifyTaskCommented({
+          taskId: params.id,
+          projectId: task.projectId,
+          taskTitle: task.title,
+          reporterId: task.reporterId,
+          assigneeId: task.assigneeId,
+          actorId: auth.userId,
+          actorName: comment.author?.name ?? 'Someone',
+          commentSnippet: snippet,
+        }).catch(() => {})
         return { comment }
       })
 
-      .post('/api/tickets/:id/evidence', async ({ request, params, set }) => {
+      .post('/api/tasks/:id/evidence', async ({ request, params, set }) => {
         const auth = await requireAuth(request)
         if (!auth) {
           set.status = 401
           return { error: 'Unauthorized' }
         }
-        if (auth.role === 'USER') {
-          set.status = 403
-          return { error: 'Forbidden' }
-        }
-
-        const ticket = await prisma.ticket.findUnique({ where: { id: params.id }, select: { id: true } })
-        if (!ticket) {
+        const task = await prisma.task.findUnique({ where: { id: params.id }, select: { projectId: true } })
+        if (!task) {
           set.status = 404
-          return { error: 'Ticket not found' }
+          return { error: 'Task not found' }
         }
-
+        const membership = await requireProjectMember(task.projectId, auth.userId)
+        if (!membership || membership.role === 'VIEWER') {
+          set.status = 403
+          return { error: 'Not a writable project member' }
+        }
         const body = (await request.json()) as { kind?: string; url?: string; note?: string }
         if (!body.kind || !body.url) {
           set.status = 400
           return { error: 'kind dan url wajib diisi' }
         }
-
-        const evidence = await prisma.ticketEvidence.create({
-          data: { ticketId: params.id, kind: body.kind, url: body.url, note: body.note ?? null },
+        const evidence = await prisma.taskEvidence.create({
+          data: { taskId: params.id, kind: body.kind, url: body.url, note: body.note ?? null },
         })
         return { evidence }
+      })
+
+      .post('/api/tasks/:id/evidence/upload', async ({ request, params, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const task = await prisma.task.findUnique({ where: { id: params.id }, select: { projectId: true } })
+        if (!task) {
+          set.status = 404
+          return { error: 'Task not found' }
+        }
+        const membership = await requireProjectMember(task.projectId, auth.userId)
+        if (!membership || membership.role === 'VIEWER') {
+          set.status = 403
+          return { error: 'Not a writable project member' }
+        }
+        const form = await request.formData()
+        const file = form.get('file')
+        const note = form.get('note')
+        if (!(file instanceof File)) {
+          set.status = 400
+          return { error: 'file wajib diupload (field name: file)' }
+        }
+        if (file.size === 0) {
+          set.status = 400
+          return { error: 'File kosong' }
+        }
+        if (file.size > env.UPLOAD_MAX_BYTES) {
+          set.status = 413
+          return { error: `File terlalu besar (max ${env.UPLOAD_MAX_BYTES} bytes)` }
+        }
+        const fs = await import('node:fs/promises')
+        const path = await import('node:path')
+        const safeDir = path.resolve(env.UPLOADS_DIR, 'evidence', params.id)
+        await fs.mkdir(safeDir, { recursive: true })
+        const ext = path
+          .extname(file.name)
+          .slice(0, 12)
+          .replace(/[^a-zA-Z0-9.]/g, '')
+        const storedName = `${crypto.randomUUID()}${ext}`
+        const fullPath = path.join(safeDir, storedName)
+        await Bun.write(fullPath, file)
+        const mimeKind = file.type.startsWith('image/')
+          ? 'SCREENSHOT'
+          : file.type.startsWith('text/') || file.type === 'application/json'
+            ? 'LOG'
+            : 'FILE'
+        const displayNote = [
+          file.name,
+          `${(file.size / 1024).toFixed(1)} KB`,
+          file.type || 'unknown',
+          note && typeof note === 'string' ? note : null,
+        ]
+          .filter(Boolean)
+          .join(' · ')
+        const evidence = await prisma.taskEvidence.create({
+          data: {
+            taskId: params.id,
+            kind: mimeKind,
+            url: `/api/evidence/${storedName}?task=${params.id}`,
+            note: displayNote,
+          },
+        })
+        audit(auth.userId, 'EVIDENCE_UPLOADED', `task=${params.id} file=${file.name} size=${file.size}`, getIp(request))
+        return { evidence }
+      })
+
+      .get('/api/evidence/:file', async ({ request, params, query, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const taskId = typeof query?.task === 'string' ? query.task : null
+        if (!taskId) {
+          set.status = 400
+          return { error: 'task param wajib' }
+        }
+        const task = await prisma.task.findUnique({ where: { id: taskId }, select: { projectId: true } })
+        if (!task) {
+          set.status = 404
+          return { error: 'Task not found' }
+        }
+        const membership = await requireProjectMember(task.projectId, auth.userId)
+        if (!membership && auth.role !== 'SUPER_ADMIN') {
+          set.status = 403
+          return { error: 'Not a project member' }
+        }
+        const path = await import('node:path')
+        const safeName = params.file.replace(/[^a-zA-Z0-9._-]/g, '')
+        const fullPath = path.resolve(env.UPLOADS_DIR, 'evidence', taskId, safeName)
+        const rootDir = path.resolve(env.UPLOADS_DIR, 'evidence', taskId)
+        if (!fullPath.startsWith(rootDir)) {
+          set.status = 400
+          return { error: 'Invalid path' }
+        }
+        const file = Bun.file(fullPath)
+        if (!(await file.exists())) {
+          set.status = 404
+          return { error: 'File not found' }
+        }
+        return new Response(file)
+      })
+
+      // ─── Tags API ─────────────────────────────────────
+      .get('/api/projects/:id/tags', async ({ request, params, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const membership = await requireProjectMember(params.id, auth.userId)
+        if (!membership && auth.role !== 'SUPER_ADMIN') {
+          set.status = 403
+          return { error: 'Not a project member' }
+        }
+        const tags = await prisma.tag.findMany({
+          where: { projectId: params.id },
+          orderBy: { name: 'asc' },
+        })
+        return { tags }
+      })
+
+      .post('/api/projects/:id/tags', async ({ request, params, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const membership = await requireProjectMember(params.id, auth.userId)
+        if (!membership || membership.role === 'VIEWER') {
+          set.status = 403
+          return { error: 'Not a writable project member' }
+        }
+        const body = (await request.json()) as { name?: string; color?: string }
+        if (!body.name?.trim()) {
+          set.status = 400
+          return { error: 'name wajib diisi' }
+        }
+        const tag = await prisma.tag
+          .create({
+            data: {
+              projectId: params.id,
+              name: body.name.trim(),
+              color: body.color ?? 'blue',
+            },
+          })
+          .catch((e: unknown) => {
+            if ((e as { code?: string }).code === 'P2002') return null
+            throw e
+          })
+        if (!tag) {
+          set.status = 409
+          return { error: 'Tag with that name already exists' }
+        }
+        audit(auth.userId, 'TAG_CREATED', `${params.id} ← ${tag.name}`, getIp(request))
+        return { tag }
+      })
+
+      .patch('/api/tags/:id', async ({ request, params, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const tag = await prisma.tag.findUnique({ where: { id: params.id } })
+        if (!tag) {
+          set.status = 404
+          return { error: 'Tag not found' }
+        }
+        const membership = await requireProjectMember(tag.projectId, auth.userId)
+        if (!membership || membership.role === 'VIEWER') {
+          set.status = 403
+          return { error: 'Not a writable project member' }
+        }
+        const body = (await request.json()) as { name?: string; color?: string }
+        const data: Record<string, unknown> = {}
+        if (body.name !== undefined) data.name = body.name.trim()
+        if (body.color !== undefined) data.color = body.color
+        const updated = await prisma.tag.update({ where: { id: params.id }, data })
+        return { tag: updated }
+      })
+
+      .delete('/api/tags/:id', async ({ request, params, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const tag = await prisma.tag.findUnique({ where: { id: params.id } })
+        if (!tag) {
+          set.status = 404
+          return { error: 'Tag not found' }
+        }
+        const membership = await requireProjectMember(tag.projectId, auth.userId)
+        if (!membership || membership.role === 'VIEWER') {
+          set.status = 403
+          return { error: 'Not a writable project member' }
+        }
+        await prisma.tag.delete({ where: { id: params.id } })
+        audit(auth.userId, 'TAG_DELETED', `${tag.projectId} ← ${tag.name}`, getIp(request))
+        return { ok: true }
+      })
+
+      // ─── Task dependencies ────────────────────────────
+      .post('/api/tasks/:id/dependencies', async ({ request, params, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const task = await prisma.task.findUnique({ where: { id: params.id }, select: { projectId: true } })
+        if (!task) {
+          set.status = 404
+          return { error: 'Task not found' }
+        }
+        const membership = await requireProjectMember(task.projectId, auth.userId)
+        if (!membership || membership.role === 'VIEWER') {
+          set.status = 403
+          return { error: 'Not a writable project member' }
+        }
+        const body = (await request.json()) as { blockedById?: string }
+        if (!body.blockedById) {
+          set.status = 400
+          return { error: 'blockedById wajib diisi' }
+        }
+        if (body.blockedById === params.id) {
+          set.status = 400
+          return { error: 'Task cannot block itself' }
+        }
+        const blocker = await prisma.task.findUnique({ where: { id: body.blockedById }, select: { projectId: true } })
+        if (!blocker || blocker.projectId !== task.projectId) {
+          set.status = 400
+          return { error: 'Blocker task must be in the same project' }
+        }
+        const dep = await prisma.taskDependency
+          .create({ data: { taskId: params.id, blockedById: body.blockedById } })
+          .catch((e: unknown) => {
+            if ((e as { code?: string }).code === 'P2002') return null
+            throw e
+          })
+        if (!dep) {
+          set.status = 409
+          return { error: 'Dependency already exists' }
+        }
+        return { dependency: dep }
+      })
+
+      .delete('/api/tasks/:id/dependencies/:blockedById', async ({ request, params, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const task = await prisma.task.findUnique({ where: { id: params.id }, select: { projectId: true } })
+        if (!task) {
+          set.status = 404
+          return { error: 'Task not found' }
+        }
+        const membership = await requireProjectMember(task.projectId, auth.userId)
+        if (!membership || membership.role === 'VIEWER') {
+          set.status = 403
+          return { error: 'Not a writable project member' }
+        }
+        await prisma.taskDependency.delete({
+          where: { taskId_blockedById: { taskId: params.id, blockedById: params.blockedById } },
+        })
+        return { ok: true }
+      })
+
+      // ─── Task checklist ───────────────────────────────
+      .post('/api/tasks/:id/checklist', async ({ request, params, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const task = await prisma.task.findUnique({ where: { id: params.id }, select: { projectId: true } })
+        if (!task) {
+          set.status = 404
+          return { error: 'Task not found' }
+        }
+        const membership = await requireProjectMember(task.projectId, auth.userId)
+        if (!membership || membership.role === 'VIEWER') {
+          set.status = 403
+          return { error: 'Not a writable project member' }
+        }
+        const body = (await request.json()) as { title?: string }
+        if (!body.title?.trim()) {
+          set.status = 400
+          return { error: 'title wajib diisi' }
+        }
+        const last = await prisma.taskChecklistItem.findFirst({
+          where: { taskId: params.id },
+          orderBy: { order: 'desc' },
+          select: { order: true },
+        })
+        const item = await prisma.taskChecklistItem.create({
+          data: {
+            taskId: params.id,
+            title: body.title.trim(),
+            order: (last?.order ?? -1) + 1,
+          },
+        })
+        return { item }
+      })
+
+      .patch('/api/checklist/:id', async ({ request, params, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const existing = await prisma.taskChecklistItem.findUnique({
+          where: { id: params.id },
+          include: { task: { select: { projectId: true } } },
+        })
+        if (!existing) {
+          set.status = 404
+          return { error: 'Checklist item not found' }
+        }
+        const membership = await requireProjectMember(existing.task.projectId, auth.userId)
+        if (!membership || membership.role === 'VIEWER') {
+          set.status = 403
+          return { error: 'Not a writable project member' }
+        }
+        const body = (await request.json()) as { title?: string; done?: boolean; order?: number }
+        const data: Record<string, unknown> = {}
+        if (body.title !== undefined) data.title = body.title.trim()
+        if (body.done !== undefined) data.done = body.done
+        if (body.order !== undefined) data.order = body.order
+        const item = await prisma.taskChecklistItem.update({ where: { id: params.id }, data })
+        return { item }
+      })
+
+      .delete('/api/checklist/:id', async ({ request, params, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const existing = await prisma.taskChecklistItem.findUnique({
+          where: { id: params.id },
+          include: { task: { select: { projectId: true } } },
+        })
+        if (!existing) {
+          set.status = 404
+          return { error: 'Checklist item not found' }
+        }
+        const membership = await requireProjectMember(existing.task.projectId, auth.userId)
+        if (!membership || membership.role === 'VIEWER') {
+          set.status = 403
+          return { error: 'Not a writable project member' }
+        }
+        await prisma.taskChecklistItem.delete({ where: { id: params.id } })
+        return { ok: true }
+      })
+
+      // ─── Activity (pm-watch user-facing) ──────────────
+      .get('/api/activity/agents', async ({ request, query, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const isAdmin = auth.role === 'ADMIN' || auth.role === 'SUPER_ADMIN'
+        const scopeUserId = isAdmin && query.userId ? String(query.userId) : auth.userId
+        const agents = await prisma.agent.findMany({
+          where: { claimedById: scopeUserId, status: 'APPROVED' },
+          select: {
+            id: true,
+            agentId: true,
+            hostname: true,
+            osUser: true,
+            lastSeenAt: true,
+            claimedBy: { select: { id: true, name: true, email: true } },
+            _count: { select: { events: true } },
+          },
+          orderBy: { lastSeenAt: 'desc' },
+        })
+        let availableUsers:
+          | Array<{ id: string; name: string; email: string; agentCount: number; eventCount: number }>
+          | undefined
+        if (isAdmin) {
+          const grouped = await prisma.agent.groupBy({
+            by: ['claimedById'],
+            where: { status: 'APPROVED', claimedById: { not: null } },
+            _count: { _all: true },
+          })
+          const userIds = grouped.map((g) => g.claimedById).filter((v): v is string => !!v)
+          const users = await prisma.user.findMany({
+            where: { id: { in: userIds } },
+            select: { id: true, name: true, email: true },
+          })
+          const eventCounts = await prisma.activityEvent.groupBy({
+            by: ['agentId'],
+            _count: { _all: true },
+          })
+          const agentUserMap = await prisma.agent.findMany({
+            where: { claimedById: { in: userIds } },
+            select: { id: true, claimedById: true },
+          })
+          const eventByUser = new Map<string, number>()
+          for (const ec of eventCounts) {
+            const au = agentUserMap.find((a) => a.id === ec.agentId)
+            if (au?.claimedById) {
+              eventByUser.set(au.claimedById, (eventByUser.get(au.claimedById) ?? 0) + ec._count._all)
+            }
+          }
+          availableUsers = users.map((u) => ({
+            ...u,
+            agentCount: grouped.find((g) => g.claimedById === u.id)?._count._all ?? 0,
+            eventCount: eventByUser.get(u.id) ?? 0,
+          }))
+        }
+        return { agents, scopeUserId, availableUsers }
+      })
+
+      .get('/api/activity', async ({ request, query, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const isAdmin = auth.role === 'ADMIN' || auth.role === 'SUPER_ADMIN'
+        const scopeUserId = isAdmin && query.userId ? String(query.userId) : auth.userId
+        const myAgents = await prisma.agent.findMany({
+          where: { claimedById: scopeUserId, status: 'APPROVED' },
+          select: { id: true },
+        })
+        const agentIds = myAgents.map((a) => a.id)
+        if (agentIds.length === 0) return { events: [], count: 0 }
+
+        const where: Record<string, unknown> = { agentId: { in: agentIds } }
+        if (query.agentId && agentIds.includes(String(query.agentId))) where.agentId = String(query.agentId)
+        if (query.bucketId) where.bucketId = String(query.bucketId)
+        const ts: Record<string, Date> = {}
+        if (query.from) ts.gte = new Date(String(query.from))
+        if (query.to) ts.lte = new Date(String(query.to))
+        if (Object.keys(ts).length > 0) where.timestamp = ts
+
+        const limit = Math.min(Number(query.limit ?? 200), 1000)
+        const events = await prisma.activityEvent.findMany({
+          where,
+          orderBy: { timestamp: 'desc' },
+          take: limit,
+          include: { agent: { select: { hostname: true, osUser: true } } },
+        })
+        return { events, count: events.length, limit }
+      })
+
+      .get('/api/activity/calendar', async ({ request, query, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const isAdmin = auth.role === 'ADMIN' || auth.role === 'SUPER_ADMIN'
+        const scopeUserId = isAdmin && query.userId ? String(query.userId) : auth.userId
+        const monthStr = typeof query.month === 'string' ? query.month : ''
+        const match = monthStr.match(/^(\d{4})-(\d{2})$/)
+        const now = new Date()
+        const year = match ? Number(match[1]) : now.getFullYear()
+        const month = match ? Number(match[2]) - 1 : now.getMonth()
+        const start = new Date(year, month, 1)
+        const end = new Date(year, month + 1, 1)
+
+        const myAgents = await prisma.agent.findMany({
+          where: { claimedById: scopeUserId, status: 'APPROVED' },
+          select: { id: true },
+        })
+        const agentIds = myAgents.map((a) => a.id)
+        if (agentIds.length === 0) {
+          return { month: `${year}-${String(month + 1).padStart(2, '0')}`, days: {} }
+        }
+
+        const rows = await prisma.$queryRaw<Array<{ day: Date; count: bigint; duration: number }>>`
+          SELECT DATE_TRUNC('day', timestamp) AS day,
+                 COUNT(*)::bigint AS count,
+                 COALESCE(SUM(duration), 0)::float8 AS duration
+          FROM activity_event
+          WHERE "agentId" = ANY (${agentIds})
+            AND timestamp >= ${start}
+            AND timestamp < ${end}
+          GROUP BY day
+          ORDER BY day ASC
+        `
+        const days: Record<string, { count: number; durationSec: number }> = {}
+        for (const r of rows) {
+          const d = new Date(r.day)
+          const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+          days[key] = { count: Number(r.count), durationSec: r.duration }
+        }
+        return { month: `${year}-${String(month + 1).padStart(2, '0')}`, days }
+      })
+
+      .get('/api/activity/heatmap', async ({ request, query, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const isAdmin = auth.role === 'ADMIN' || auth.role === 'SUPER_ADMIN'
+        const scopeUserId = isAdmin && query.userId ? String(query.userId) : auth.userId
+        const yearStr = typeof query.year === 'string' ? query.year : ''
+        const match = yearStr.match(/^\d{4}$/)
+        const now = new Date()
+        const year = match ? Number(yearStr) : now.getFullYear()
+        const start = new Date(year, 0, 1)
+        const end = new Date(year + 1, 0, 1)
+
+        const myAgents = await prisma.agent.findMany({
+          where: { claimedById: scopeUserId, status: 'APPROVED' },
+          select: { id: true },
+        })
+        const agentIds = myAgents.map((a) => a.id)
+        if (agentIds.length === 0) {
+          return { year, days: {} }
+        }
+
+        const rows = await prisma.$queryRaw<Array<{ day: Date; count: bigint; duration: number }>>`
+          SELECT DATE_TRUNC('day', timestamp) AS day,
+                 COUNT(*)::bigint AS count,
+                 COALESCE(SUM(duration), 0)::float8 AS duration
+          FROM activity_event
+          WHERE "agentId" = ANY (${agentIds})
+            AND timestamp >= ${start}
+            AND timestamp < ${end}
+          GROUP BY day
+          ORDER BY day ASC
+        `
+        const days: Record<string, { count: number; durationSec: number }> = {}
+        for (const r of rows) {
+          const d = new Date(r.day)
+          const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+          days[key] = { count: Number(r.count), durationSec: r.duration }
+        }
+        return { year, days }
+      })
+
+      .get('/api/activity/summary', async ({ request, query, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const isAdmin = auth.role === 'ADMIN' || auth.role === 'SUPER_ADMIN'
+        const scopeUserId = isAdmin && query.userId ? String(query.userId) : auth.userId
+        const myAgents = await prisma.agent.findMany({
+          where: { claimedById: scopeUserId, status: 'APPROVED' },
+          select: { id: true },
+        })
+        const agentIds = myAgents.map((a) => a.id)
+        if (agentIds.length === 0) {
+          return {
+            today: { count: 0, durationSec: 0 },
+            week: { count: 0, durationSec: 0 },
+            topApps: [],
+            topTitles: [],
+            byBucket: [],
+          }
+        }
+
+        const now = new Date()
+        const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+        const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
+        const windowStart = query.from ? new Date(String(query.from)) : weekAgo
+        const windowEnd = query.to ? new Date(String(query.to)) : now
+
+        const [todayAgg, weekAgg, bucketAgg, windowEvents] = await Promise.all([
+          prisma.activityEvent.aggregate({
+            where: { agentId: { in: agentIds }, timestamp: { gte: startOfDay } },
+            _sum: { duration: true },
+            _count: { _all: true },
+          }),
+          prisma.activityEvent.aggregate({
+            where: { agentId: { in: agentIds }, timestamp: { gte: weekAgo } },
+            _sum: { duration: true },
+            _count: { _all: true },
+          }),
+          prisma.activityEvent.groupBy({
+            by: ['bucketId'],
+            where: { agentId: { in: agentIds }, timestamp: { gte: windowStart, lte: windowEnd } },
+            _sum: { duration: true },
+            _count: { _all: true },
+          }),
+          prisma.activityEvent.findMany({
+            where: { agentId: { in: agentIds }, timestamp: { gte: windowStart, lte: windowEnd } },
+            select: { duration: true, data: true, bucketId: true },
+            take: 5000,
+          }),
+        ])
+
+        const appTotals = new Map<string, { durationSec: number; count: number }>()
+        const titleTotals = new Map<string, { durationSec: number; count: number; app: string }>()
+        for (const e of windowEvents) {
+          const d = (e.data ?? {}) as Record<string, unknown>
+          const app = typeof d.app === 'string' ? d.app : null
+          const title = typeof d.title === 'string' ? d.title : null
+          if (app) {
+            const cur = appTotals.get(app) ?? { durationSec: 0, count: 0 }
+            cur.durationSec += e.duration
+            cur.count += 1
+            appTotals.set(app, cur)
+          }
+          if (app && title) {
+            const key = `${app} :: ${title}`
+            const cur = titleTotals.get(key) ?? { durationSec: 0, count: 0, app }
+            cur.durationSec += e.duration
+            cur.count += 1
+            titleTotals.set(key, cur)
+          }
+        }
+        const topApps = [...appTotals.entries()]
+          .map(([app, v]) => ({ app, durationSec: v.durationSec, count: v.count }))
+          .sort((a, b) => b.durationSec - a.durationSec)
+          .slice(0, 10)
+        const topTitles = [...titleTotals.entries()]
+          .map(([key, v]) => ({
+            key,
+            app: v.app,
+            title: key.slice(v.app.length + 4),
+            durationSec: v.durationSec,
+            count: v.count,
+          }))
+          .sort((a, b) => b.durationSec - a.durationSec)
+          .slice(0, 10)
+        const byBucket = bucketAgg
+          .map((b) => ({ bucketId: b.bucketId, durationSec: b._sum.duration ?? 0, count: b._count._all }))
+          .sort((a, b) => b.durationSec - a.durationSec)
+
+        return {
+          today: { count: todayAgg._count._all, durationSec: todayAgg._sum.duration ?? 0 },
+          week: { count: weekAgg._count._all, durationSec: weekAgg._sum.duration ?? 0 },
+          window: { from: windowStart.toISOString(), to: windowEnd.toISOString() },
+          topApps,
+          topTitles,
+          byBucket,
+        }
+      })
+
+      // ─── pm-watch Webhook ─────────────────────────────
+      .post('/webhooks/aw', async ({ request, set }) => {
+        const ip = getIp(request)
+        const bearer = (request.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '').trim()
+        const logRequest = (
+          statusCode: number,
+          reason: string | null,
+          tokenId: string | null,
+          agentDbId: string | null,
+          eventsIn: number,
+        ) => {
+          prisma.webhookRequestLog
+            .create({ data: { statusCode, reason, tokenId, agentId: agentDbId, ip, eventsIn } })
+            .catch(() => null)
+        }
+
+        if (!env.PMW_WEBHOOK_TOKEN) {
+          const anyToken = await prisma.webhookToken.count()
+          if (anyToken === 0) {
+            logRequest(503, 'unconfigured', null, null, 0)
+            set.status = 503
+            return { error: 'No webhook token configured' }
+          }
+        }
+        const auth = await verifyWebhookToken(bearer, env.PMW_WEBHOOK_TOKEN)
+        if (!auth.ok) {
+          appLog('warn', `pm-watch webhook ${auth.reason} from ${ip}`)
+          const statusCode = auth.reason === 'unauthorized' ? 401 : 403
+          logRequest(statusCode, auth.reason, auth.tokenId, null, 0)
+          set.status = statusCode
+          return { error: auth.reason === 'unauthorized' ? 'Unauthorized' : `Token ${auth.reason}` }
+        }
+
+        let body: {
+          agent_id?: string
+          hostname?: string
+          os_user?: string
+          events?: Array<{
+            bucket_id?: string
+            event_id?: number
+            timestamp?: string
+            duration?: number
+            data?: unknown
+          }>
+        }
+        try {
+          body = (await request.json()) as typeof body
+        } catch {
+          logRequest(400, 'invalid_json', auth.tokenId, null, 0)
+          set.status = 400
+          return { error: 'Invalid JSON' }
+        }
+
+        const { agent_id, hostname, os_user } = body
+        if (!agent_id || !hostname || !os_user) {
+          logRequest(400, 'missing_fields', auth.tokenId, null, 0)
+          set.status = 400
+          return { error: 'agent_id, hostname, os_user wajib diisi' }
+        }
+        if (!Array.isArray(body.events)) {
+          logRequest(400, 'events_not_array', auth.tokenId, null, 0)
+          set.status = 400
+          return { error: 'events harus array' }
+        }
+        if (body.events.length > env.PMW_EVENT_BATCH_MAX) {
+          logRequest(413, 'batch_too_large', auth.tokenId, null, body.events.length)
+          set.status = 413
+          return { error: `Batch terlalu besar (max ${env.PMW_EVENT_BATCH_MAX})` }
+        }
+
+        const now = new Date()
+        const agent = await prisma.agent.upsert({
+          where: { agentId: agent_id },
+          update: { hostname, osUser: os_user, lastSeenAt: now },
+          create: { agentId: agent_id, hostname, osUser: os_user, lastSeenAt: now },
+        })
+
+        if (agent.status === 'REVOKED') {
+          appLog('warn', `pm-watch events from REVOKED agent ${agent_id} rejected`)
+          logRequest(403, 'agent_revoked', auth.tokenId, agent.id, body.events.length)
+          set.status = 403
+          return { error: 'Agent revoked' }
+        }
+
+        const rows = body.events.flatMap((e) => {
+          if (!e.bucket_id || typeof e.event_id !== 'number' || !e.timestamp || typeof e.duration !== 'number')
+            return []
+          const ts = new Date(e.timestamp)
+          if (Number.isNaN(ts.getTime())) return []
+          return [
+            {
+              agentId: agent.id,
+              bucketId: e.bucket_id,
+              eventId: e.event_id,
+              timestamp: ts,
+              duration: e.duration,
+              data: (e.data ?? {}) as object,
+            },
+          ]
+        })
+
+        let inserted = 0
+        if (rows.length > 0) {
+          const { count } = await prisma.activityEvent.createMany({ data: rows, skipDuplicates: true })
+          inserted = count
+        }
+
+        appLog(
+          'info',
+          `pm-watch /webhooks/aw ${agent_id} host=${hostname} received=${body.events.length} inserted=${inserted} status=${agent.status}`,
+        )
+        logRequest(200, null, auth.tokenId, agent.id, body.events.length)
+
+        return {
+          ok: true,
+          agent: { id: agent.id, status: agent.status, claimed: !!agent.claimedById },
+          received: body.events.length,
+          inserted,
+          skipped: body.events.length - inserted,
+        }
+      })
+
+      // ─── GitHub Webhook ───────────────────────────────
+      .post('/webhooks/github', async ({ request, set }) => {
+        const ip = getIp(request)
+        const deliveryId = request.headers.get('x-github-delivery')
+        const event = request.headers.get('x-github-event') ?? 'unknown'
+        const signature = request.headers.get('x-hub-signature-256')
+
+        const logRequest = (statusCode: number, reason: string | null, projectId: string | null, eventsIn: number) => {
+          prisma.githubWebhookLog
+            .create({ data: { statusCode, reason, projectId, deliveryId, event, ip, eventsIn } })
+            .catch(() => null)
+        }
+
+        if (!env.GITHUB_WEBHOOK_SECRET) {
+          logRequest(503, 'unconfigured', null, 0)
+          set.status = 503
+          return { error: 'GitHub webhook not configured' }
+        }
+
+        const rawBody = await request.text()
+        if (!verifyGithubSignature(rawBody, signature, env.GITHUB_WEBHOOK_SECRET)) {
+          logRequest(401, 'bad_signature', null, 0)
+          set.status = 401
+          return { error: 'Invalid signature' }
+        }
+
+        if (event === 'ping') {
+          logRequest(200, 'ping', null, 0)
+          return { ok: true, pong: true }
+        }
+
+        let payload: Record<string, unknown>
+        try {
+          payload = JSON.parse(rawBody) as Record<string, unknown>
+        } catch {
+          logRequest(400, 'invalid_json', null, 0)
+          set.status = 400
+          return { error: 'Invalid JSON' }
+        }
+
+        const repo = payload.repository as { full_name?: string; html_url?: string } | undefined
+        const repoFullName = repo?.full_name ? normalizeGithubRepo(repo.full_name) : null
+        if (!repoFullName) {
+          logRequest(400, 'missing_repo', null, 0)
+          set.status = 400
+          return { error: 'Missing repository.full_name' }
+        }
+
+        const project = await prisma.project.findUnique({ where: { githubRepo: repoFullName } })
+        if (!project) {
+          logRequest(404, 'project_not_linked', null, 0)
+          set.status = 404
+          return { error: `No project linked to ${repoFullName}` }
+        }
+
+        type EventRow = {
+          projectId: string
+          kind: 'PUSH_COMMIT' | 'PR_OPENED' | 'PR_CLOSED' | 'PR_MERGED' | 'PR_REVIEWED'
+          actorLogin: string
+          actorEmail: string | null
+          matchedUserId: string | null
+          title: string
+          url: string
+          sha: string | null
+          prNumber: number | null
+          metadata: object | null
+          createdAt: Date
+        }
+        const rows: EventRow[] = []
+
+        if (event === 'push') {
+          const commits = (payload.commits as Array<Record<string, unknown>>) ?? []
+          const pusher = payload.pusher as { name?: string; email?: string } | undefined
+          for (const c of commits) {
+            const id = typeof c.id === 'string' ? c.id : null
+            if (!id) continue
+            const author = c.author as { name?: string; email?: string; username?: string } | undefined
+            const message = typeof c.message === 'string' ? c.message : ''
+            const timestamp = typeof c.timestamp === 'string' ? new Date(c.timestamp) : new Date()
+            const url = typeof c.url === 'string' ? c.url : `https://github.com/${repoFullName}/commit/${id}`
+            rows.push({
+              projectId: project.id,
+              kind: 'PUSH_COMMIT',
+              actorLogin: author?.username ?? author?.name ?? pusher?.name ?? 'unknown',
+              actorEmail: author?.email ?? pusher?.email ?? null,
+              matchedUserId: null,
+              title: message.split('\n')[0].slice(0, 500),
+              url,
+              sha: id,
+              prNumber: null,
+              metadata: {
+                ref: payload.ref ?? null,
+                added: c.added ?? [],
+                removed: c.removed ?? [],
+                modified: c.modified ?? [],
+              },
+              createdAt: Number.isNaN(timestamp.getTime()) ? new Date() : timestamp,
+            })
+          }
+        } else if (event === 'pull_request') {
+          const action = typeof payload.action === 'string' ? payload.action : ''
+          const pr = payload.pull_request as
+            | {
+                number?: number
+                title?: string
+                html_url?: string
+                merged?: boolean
+                user?: { login?: string }
+                merged_at?: string | null
+                closed_at?: string | null
+                created_at?: string
+              }
+            | undefined
+          const kind: EventRow['kind'] | null =
+            action === 'opened' || action === 'reopened'
+              ? 'PR_OPENED'
+              : action === 'closed'
+                ? pr?.merged
+                  ? 'PR_MERGED'
+                  : 'PR_CLOSED'
+                : null
+          if (kind && pr?.number != null) {
+            const ts =
+              kind === 'PR_MERGED' && pr.merged_at
+                ? new Date(pr.merged_at)
+                : kind === 'PR_CLOSED' && pr.closed_at
+                  ? new Date(pr.closed_at)
+                  : pr.created_at
+                    ? new Date(pr.created_at)
+                    : new Date()
+            rows.push({
+              projectId: project.id,
+              kind,
+              actorLogin: pr.user?.login ?? 'unknown',
+              actorEmail: null,
+              matchedUserId: null,
+              title: (pr.title ?? '').slice(0, 500),
+              url: pr.html_url ?? `https://github.com/${repoFullName}/pull/${pr.number}`,
+              sha: null,
+              prNumber: pr.number,
+              metadata: { action, merged: pr.merged ?? false },
+              createdAt: Number.isNaN(ts.getTime()) ? new Date() : ts,
+            })
+          }
+        } else if (event === 'pull_request_review') {
+          const pr = payload.pull_request as { number?: number; html_url?: string; title?: string } | undefined
+          const review = payload.review as
+            | { state?: string; user?: { login?: string }; submitted_at?: string }
+            | undefined
+          if (pr?.number != null && review) {
+            const ts = review.submitted_at ? new Date(review.submitted_at) : new Date()
+            rows.push({
+              projectId: project.id,
+              kind: 'PR_REVIEWED',
+              actorLogin: review.user?.login ?? 'unknown',
+              actorEmail: null,
+              matchedUserId: null,
+              title: `${review.state ?? 'reviewed'}: ${(pr.title ?? '').slice(0, 480)}`,
+              url: pr.html_url ?? `https://github.com/${repoFullName}/pull/${pr.number}`,
+              sha: null,
+              prNumber: pr.number,
+              metadata: { state: review.state ?? null },
+              createdAt: Number.isNaN(ts.getTime()) ? new Date() : ts,
+            })
+          }
+        }
+
+        let inserted = 0
+        if (rows.length > 0) {
+          const emails = [...new Set(rows.map((r) => r.actorEmail).filter((e): e is string => !!e))]
+          const users = emails.length
+            ? await prisma.user.findMany({ where: { email: { in: emails } }, select: { id: true, email: true } })
+            : []
+          const emailToUser = new Map(users.map((u) => [u.email.toLowerCase(), u.id]))
+          for (const r of rows) {
+            if (r.actorEmail) r.matchedUserId = emailToUser.get(r.actorEmail.toLowerCase()) ?? null
+          }
+          const { count } = await prisma.projectGithubEvent.createMany({
+            data: rows.map((r) => ({
+              projectId: r.projectId,
+              kind: r.kind,
+              actorLogin: r.actorLogin,
+              actorEmail: r.actorEmail,
+              matchedUserId: r.matchedUserId,
+              title: r.title,
+              url: r.url,
+              sha: r.sha,
+              prNumber: r.prNumber,
+              metadata: r.metadata ?? undefined,
+              createdAt: r.createdAt,
+            })),
+            skipDuplicates: true,
+          })
+          inserted = count
+        }
+
+        appLog(
+          'info',
+          `github webhook event=${event} repo=${repoFullName} project=${project.id} received=${rows.length} inserted=${inserted}`,
+        )
+        logRequest(200, rows.length === 0 ? 'ignored_event' : null, project.id, rows.length)
+
+        return { ok: true, event, received: rows.length, inserted }
+      })
+
+      // ─── My Agents API (any authenticated user) ────────
+      .get('/api/me/agents', async ({ request, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const agents = await prisma.agent.findMany({
+          where: { claimedById: auth.userId, status: 'APPROVED' },
+          select: {
+            id: true,
+            agentId: true,
+            hostname: true,
+            osUser: true,
+            status: true,
+            lastSeenAt: true,
+            createdAt: true,
+            _count: { select: { events: true } },
+          },
+          orderBy: [{ lastSeenAt: { sort: 'desc', nulls: 'last' } }, { createdAt: 'desc' }],
+        })
+        return { agents }
+      })
+
+      // ─── Notifications API (authenticated user) ────────
+      .get('/api/me/notifications', async ({ request, query, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const limitRaw = Number(query?.limit ?? 50)
+        const limit = Math.min(200, Math.max(1, Number.isFinite(limitRaw) ? limitRaw : 50))
+        const onlyUnread = query?.unread === '1' || query?.unread === 'true'
+        const notifications = await prisma.notification.findMany({
+          where: { recipientId: auth.userId, ...(onlyUnread ? { readAt: null } : {}) },
+          include: { actor: { select: { id: true, name: true, email: true } } },
+          orderBy: { createdAt: 'desc' },
+          take: limit,
+        })
+        const unreadCount = await prisma.notification.count({
+          where: { recipientId: auth.userId, readAt: null },
+        })
+        return { notifications, unreadCount }
+      })
+
+      .get('/api/me/notifications/unread-count', async ({ request, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const unreadCount = await prisma.notification.count({
+          where: { recipientId: auth.userId, readAt: null },
+        })
+        return { unreadCount }
+      })
+
+      .post('/api/me/notifications/:id/read', async ({ request, params, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const n = await prisma.notification.findUnique({ where: { id: params.id } })
+        if (!n || n.recipientId !== auth.userId) {
+          set.status = 404
+          return { error: 'Notification not found' }
+        }
+        if (n.readAt) return { notification: n }
+        const notification = await prisma.notification.update({
+          where: { id: params.id },
+          data: { readAt: new Date() },
+        })
+        return { notification }
+      })
+
+      .post('/api/me/notifications/read-all', async ({ request, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const result = await prisma.notification.updateMany({
+          where: { recipientId: auth.userId, readAt: null },
+          data: { readAt: new Date() },
+        })
+        return { updated: result.count }
+      })
+
+      .delete('/api/me/notifications/:id', async ({ request, params, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const n = await prisma.notification.findUnique({ where: { id: params.id } })
+        if (!n || n.recipientId !== auth.userId) {
+          set.status = 404
+          return { error: 'Notification not found' }
+        }
+        await prisma.notification.delete({ where: { id: params.id } })
+        return { ok: true }
+      })
+
+      // ─── Admin Agents API (SUPER_ADMIN only) ───────────
+      .get('/api/admin/agents', async ({ request, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        if (auth.role !== 'SUPER_ADMIN') {
+          set.status = 403
+          return { error: 'Forbidden' }
+        }
+        const agents = await prisma.agent.findMany({
+          include: {
+            claimedBy: { select: { id: true, name: true, email: true, role: true } },
+            _count: { select: { events: true } },
+          },
+          orderBy: { createdAt: 'desc' },
+        })
+        return { agents }
+      })
+
+      .post('/api/admin/agents/:id/approve', async ({ request, params, set }) => {
+        const ip = getIp(request)
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        if (auth.role !== 'SUPER_ADMIN') {
+          set.status = 403
+          return { error: 'Forbidden' }
+        }
+        const { userId } = (await request.json()) as { userId?: string }
+        if (!userId) {
+          set.status = 400
+          return { error: 'userId wajib diisi' }
+        }
+        const user = await prisma.user.findUnique({ where: { id: userId }, select: { id: true, email: true } })
+        if (!user) {
+          set.status = 404
+          return { error: 'User tidak ditemukan' }
+        }
+        const agent = await prisma.agent.update({
+          where: { id: params.id },
+          data: { status: 'APPROVED', claimedById: user.id },
+          include: {
+            claimedBy: { select: { id: true, name: true, email: true, role: true } },
+            _count: { select: { events: true } },
+          },
+        })
+        audit(auth.userId, 'AGENT_APPROVED', `agent=${agent.agentId} → ${user.email}`, ip)
+        appLog('info', `Agent approved: ${agent.agentId} → ${user.email}`)
+        return { agent }
+      })
+
+      .post('/api/admin/agents/:id/revoke', async ({ request, params, set }) => {
+        const ip = getIp(request)
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        if (auth.role !== 'SUPER_ADMIN') {
+          set.status = 403
+          return { error: 'Forbidden' }
+        }
+        const agent = await prisma.agent.update({
+          where: { id: params.id },
+          data: { status: 'REVOKED', claimedById: null },
+          include: {
+            claimedBy: { select: { id: true, name: true, email: true, role: true } },
+            _count: { select: { events: true } },
+          },
+        })
+        audit(auth.userId, 'AGENT_REVOKED', `agent=${agent.agentId}`, ip)
+        appLog('info', `Agent revoked: ${agent.agentId}`)
+        return { agent }
+      })
+
+      // ─── Admin Webhook Tokens API (SUPER_ADMIN only) ──
+      .get('/api/admin/webhook-tokens', async ({ request, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        if (auth.role !== 'SUPER_ADMIN') {
+          set.status = 403
+          return { error: 'Forbidden' }
+        }
+        const tokens = await prisma.webhookToken.findMany({
+          include: { createdBy: { select: { id: true, name: true, email: true } } },
+          orderBy: { createdAt: 'desc' },
+        })
+        return {
+          tokens: tokens.map((t) => ({
+            id: t.id,
+            name: t.name,
+            tokenPrefix: t.tokenPrefix,
+            status: t.status,
+            expiresAt: t.expiresAt,
+            lastUsedAt: t.lastUsedAt,
+            createdBy: t.createdBy,
+            createdAt: t.createdAt,
+          })),
+          envFallback: !!env.PMW_WEBHOOK_TOKEN,
+        }
+      })
+      .post('/api/admin/webhook-tokens', async ({ request, set }) => {
+        const ip = getIp(request)
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        if (auth.role !== 'SUPER_ADMIN') {
+          set.status = 403
+          return { error: 'Forbidden' }
+        }
+        let body: { name?: string; expiresAt?: string | null }
+        try {
+          body = (await request.json()) as typeof body
+        } catch {
+          set.status = 400
+          return { error: 'Invalid JSON' }
+        }
+        const name = (body.name ?? '').trim()
+        if (!name) {
+          set.status = 400
+          return { error: 'name wajib diisi' }
+        }
+        let expiresAt: Date | null = null
+        if (body.expiresAt) {
+          const d = new Date(body.expiresAt)
+          if (Number.isNaN(d.getTime())) {
+            set.status = 400
+            return { error: 'expiresAt invalid' }
+          }
+          expiresAt = d
+        }
+        const { raw, hash, prefix } = generateWebhookToken()
+        const token = await prisma.webhookToken.create({
+          data: {
+            name,
+            tokenHash: hash,
+            tokenPrefix: prefix,
+            expiresAt,
+            createdById: auth.userId,
+          },
+        })
+        audit(auth.userId, 'WEBHOOK_TOKEN_CREATED', `token=${name} prefix=${prefix}`, ip)
+        appLog('info', `Webhook token created: ${name} (${prefix})`)
+        return {
+          token: {
+            id: token.id,
+            name: token.name,
+            tokenPrefix: token.tokenPrefix,
+            status: token.status,
+            expiresAt: token.expiresAt,
+            createdAt: token.createdAt,
+          },
+          raw,
+        }
+      })
+      .patch('/api/admin/webhook-tokens/:id', async ({ request, params, set }) => {
+        const ip = getIp(request)
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        if (auth.role !== 'SUPER_ADMIN') {
+          set.status = 403
+          return { error: 'Forbidden' }
+        }
+        let body: { status?: 'ACTIVE' | 'DISABLED' | 'REVOKED' }
+        try {
+          body = (await request.json()) as typeof body
+        } catch {
+          set.status = 400
+          return { error: 'Invalid JSON' }
+        }
+        if (!body.status || !['ACTIVE', 'DISABLED', 'REVOKED'].includes(body.status)) {
+          set.status = 400
+          return { error: 'status must be ACTIVE | DISABLED | REVOKED' }
+        }
+        const existing = await prisma.webhookToken.findUnique({ where: { id: params.id } })
+        if (!existing) {
+          set.status = 404
+          return { error: 'Token not found' }
+        }
+        if (existing.status === 'REVOKED') {
+          set.status = 400
+          return { error: 'Revoked tokens cannot be reactivated' }
+        }
+        const token = await prisma.webhookToken.update({
+          where: { id: params.id },
+          data: { status: body.status },
+        })
+        audit(auth.userId, `WEBHOOK_TOKEN_${body.status}`, `token=${token.name} prefix=${token.tokenPrefix}`, ip)
+        appLog('info', `Webhook token ${body.status}: ${token.name} (${token.tokenPrefix})`)
+        return { token }
+      })
+      .delete('/api/admin/webhook-tokens/:id', async ({ request, params, set }) => {
+        const ip = getIp(request)
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        if (auth.role !== 'SUPER_ADMIN') {
+          set.status = 403
+          return { error: 'Forbidden' }
+        }
+        const token = await prisma.webhookToken.delete({ where: { id: params.id } }).catch(() => null)
+        if (!token) {
+          set.status = 404
+          return { error: 'Token not found' }
+        }
+        audit(auth.userId, 'WEBHOOK_TOKEN_DELETED', `token=${token.name} prefix=${token.tokenPrefix}`, ip)
+        appLog('info', `Webhook token deleted: ${token.name} (${token.tokenPrefix})`)
+        return { ok: true }
+      })
+
+      // ─── Webhook Monitor API (SUPER_ADMIN only) ────────
+      .get('/api/admin/webhooks/stats', async ({ request, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        if (auth.role !== 'SUPER_ADMIN') {
+          set.status = 403
+          return { error: 'Forbidden' }
+        }
+        const now = Date.now()
+        const last24h = new Date(now - 24 * 60 * 60 * 1000)
+        const last7d = new Date(now - 7 * 24 * 60 * 60 * 1000)
+
+        const [total24h, total7d, okCount24h, failCount24h, authFail24h, rows24h, byToken, byAgent] = await Promise.all(
+          [
+            prisma.webhookRequestLog.count({ where: { createdAt: { gte: last24h } } }),
+            prisma.webhookRequestLog.count({ where: { createdAt: { gte: last7d } } }),
+            prisma.webhookRequestLog.count({ where: { createdAt: { gte: last24h }, statusCode: 200 } }),
+            prisma.webhookRequestLog.count({ where: { createdAt: { gte: last24h }, statusCode: { gte: 400 } } }),
+            prisma.webhookRequestLog.count({
+              where: { createdAt: { gte: last24h }, statusCode: { in: [401, 403] } },
+            }),
+            prisma.webhookRequestLog.aggregate({
+              where: { createdAt: { gte: last24h }, statusCode: 200 },
+              _sum: { eventsIn: true },
+            }),
+            prisma.webhookRequestLog.groupBy({
+              by: ['tokenId'],
+              where: { createdAt: { gte: last7d } },
+              _count: { _all: true },
+            }),
+            prisma.webhookRequestLog.groupBy({
+              by: ['agentId'],
+              where: { createdAt: { gte: last7d }, agentId: { not: null } },
+              _count: { _all: true },
+            }),
+          ],
+        )
+
+        const tokenIds = byToken.map((b) => b.tokenId).filter((x): x is string => !!x)
+        const agentIds = byAgent.map((b) => b.agentId).filter((x): x is string => !!x)
+        const [tokens, agents, seriesRows] = await Promise.all([
+          tokenIds.length
+            ? prisma.webhookToken.findMany({
+                where: { id: { in: tokenIds } },
+                select: { id: true, name: true, tokenPrefix: true, status: true, lastUsedAt: true },
+              })
+            : [],
+          agentIds.length
+            ? prisma.agent.findMany({
+                where: { id: { in: agentIds } },
+                select: { id: true, agentId: true, hostname: true, status: true, lastSeenAt: true },
+              })
+            : [],
+          prisma.webhookRequestLog.findMany({
+            where: { createdAt: { gte: last24h } },
+            select: { createdAt: true, statusCode: true, eventsIn: true },
+            orderBy: { createdAt: 'asc' },
+          }),
+        ])
+        const tokenMap = new Map(tokens.map((t) => [t.id, t]))
+        const agentMap = new Map(agents.map((a) => [a.id, a]))
+
+        const buckets: { t: string; total: number; ok: number; fail: number; authFail: number; events: number }[] = []
+        const bucketIdx = new Map<number, number>()
+        const hourMs = 60 * 60 * 1000
+        const firstHour = Math.floor((now - 23 * hourMs) / hourMs) * hourMs
+        for (let i = 0; i < 24; i++) {
+          const t = firstHour + i * hourMs
+          bucketIdx.set(t, buckets.length)
+          buckets.push({ t: new Date(t).toISOString(), total: 0, ok: 0, fail: 0, authFail: 0, events: 0 })
+        }
+        for (const r of seriesRows) {
+          const slot = Math.floor(r.createdAt.getTime() / hourMs) * hourMs
+          const idx = bucketIdx.get(slot)
+          if (idx === undefined) continue
+          const b = buckets[idx]
+          b.total += 1
+          if (r.statusCode === 200) {
+            b.ok += 1
+            b.events += r.eventsIn
+          } else if (r.statusCode === 401 || r.statusCode === 403) {
+            b.authFail += 1
+            b.fail += 1
+          } else if (r.statusCode >= 400) {
+            b.fail += 1
+          }
+        }
+
+        return {
+          series: buckets,
+          summary: {
+            total24h,
+            total7d,
+            ok24h: okCount24h,
+            fail24h: failCount24h,
+            authFail24h,
+            eventsIn24h: rows24h._sum.eventsIn ?? 0,
+            successRate24h: total24h ? okCount24h / total24h : null,
+          },
+          perToken: byToken
+            .map((b) => ({
+              tokenId: b.tokenId,
+              token: b.tokenId ? (tokenMap.get(b.tokenId) ?? null) : null,
+              hits: b._count._all,
+            }))
+            .sort((a, b) => b.hits - a.hits),
+          perAgent: byAgent
+            .map((b) => ({
+              agentDbId: b.agentId,
+              agent: b.agentId ? (agentMap.get(b.agentId) ?? null) : null,
+              hits: b._count._all,
+            }))
+            .sort((a, b) => b.hits - a.hits),
+        }
+      })
+      .get('/api/admin/webhooks/logs', async ({ request, query, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        if (auth.role !== 'SUPER_ADMIN') {
+          set.status = 403
+          return { error: 'Forbidden' }
+        }
+        const status = typeof query.status === 'string' ? query.status : 'all'
+        const limit = Math.min(Math.max(Number(query.limit) || 50, 1), 500)
+        const where: Record<string, unknown> = {}
+        if (status === 'ok') where.statusCode = 200
+        else if (status === 'fail') where.statusCode = { gte: 400 }
+        else if (status === 'auth') where.statusCode = { in: [401, 403] }
+        const logs = await prisma.webhookRequestLog.findMany({
+          where,
+          orderBy: { createdAt: 'desc' },
+          take: limit,
+          include: {
+            token: { select: { id: true, name: true, tokenPrefix: true } },
+            agent: { select: { id: true, agentId: true, hostname: true } },
+          },
+        })
+        return { logs }
       })
 
       // ─── MCP over HTTP ────────────────────────────────
@@ -1728,7 +4440,7 @@ export function createApp() {
         const mcp = createMcpServer(scope)
         await mcp.connect(transport)
         const response = await transport.handleRequest(request)
-        response.headers.set('x-mcp-server', 'app-mcp')
+        response.headers.set('x-mcp-server', 'pm-dashboard')
         response.headers.set('x-mcp-scope', scope)
         return response
       })

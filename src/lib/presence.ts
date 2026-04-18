@@ -42,6 +42,15 @@ export function broadcastToAdmins(message: object) {
   }
 }
 
+export function broadcastToUser(userId: string, message: object) {
+  const set = connections.get(userId)
+  if (!set) return
+  const msg = JSON.stringify(message)
+  for (const ws of set) {
+    ws.send(msg)
+  }
+}
+
 export function removeConnection(ws: ServerWebSocket<{ userId: string }>) {
   const userId = ws.data.userId
   const set = connections.get(userId)
