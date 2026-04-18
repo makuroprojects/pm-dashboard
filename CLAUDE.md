@@ -134,7 +134,7 @@ Projects can be linked 1:1 to a GitHub repo via `Project.githubRepo` (stored can
 Local MCP server lets Claude drive the app remotely. `.mcp.json` registers `pm-dashboard` (runs `scripts/mcp/server.ts`) alongside `playwright`. Requires `MCP_SECRET`; `MCP_SECRET_ADMIN` unlocks write/dev tools.
 
 - Entry: `scripts/mcp/server.ts` + `scripts/mcp/test-client.ts`
-- Tool modules (`scripts/mcp/tools/`): `admin`, `agents`, `code`, `db`, `dev`, `github`, `health`, `logs`, `presence`, `project`, `redis`, `webhooks`, `shared`
+- Tool modules (`scripts/mcp/tools/`): `admin`, `agents`, `code`, `db`, `dev`, `github`, `health`, `logs`, `milestones`, `presence`, `project`, `projects`, `redis`, `tasks`, `webhooks` (15 modules, 71 tools). `shared.ts` is a helper, not a tool module.
 - Agent tools: `agent_list`, `agent_get` (readonly); `agent_approve`, `agent_revoke`, `agent_reassign` (admin)
 - Webhook tools: `webhook_token_list`, `webhook_stats`, `webhook_logs` (readonly); `webhook_token_create` (returns plaintext once), `webhook_token_toggle`, `webhook_token_revoke` (admin)
 - GitHub tools (readonly): `github_summary`, `github_feed`, `github_webhook_logs` — all accept project id, name, or `owner/repo`
@@ -157,14 +157,15 @@ Two log systems:
 
 | Role | Default Route | Can Access |
 |------|--------------|------------|
-| SUPER_ADMIN | `/dev` | `/dev`, `/dashboard`, `/profile` |
-| ADMIN | `/dashboard` | `/dashboard`, `/profile` |
-| QC | `/dashboard` | `/dashboard` (QC-scoped tasks only), `/profile` |
-| USER | `/profile` | `/profile` |
+| SUPER_ADMIN | `/admin` | `/dev`, `/admin`, `/pm`, `/settings` |
+| ADMIN | `/admin` | `/admin`, `/pm`, `/settings` |
+| QC | `/pm` | `/pm` (QC-scoped tasks), `/settings` |
+| USER | `/pm` | `/pm`, `/settings` |
 
-- `getDefaultRoute(role)` in `src/frontend/hooks/useAuth.ts` — centralized redirect logic
+- `getDefaultRoute(role)` in `src/frontend/hooks/useAuth.ts` — centralized redirect logic (SUPER_ADMIN/ADMIN → `/admin`; QC/USER → `/pm`)
+- Legacy paths `/dashboard` and `/profile` exist as redirect stubs (→ `/admin` and `/settings` respectively)
 - Blocked users are redirected to `/blocked` from all protected routes
-- Tab state persisted in URL search params (`?tab=`) for `/dev` and `/dashboard`
+- Tab state persisted in URL search params (`?tab=`) for `/dev`, `/admin`, and `/pm`
 
 ## Frontend
 
@@ -176,9 +177,12 @@ React 19 + Vite 8 (middleware mode in dev). File-based routing with TanStack Rou
   - `__root.tsx` — Root layout (renders Outlet only, no floating UI)
   - `index.tsx` — Landing page (theme toggle top-right)
   - `login.tsx` — Login page (email/password + Google OAuth, theme toggle top-right)
-  - `dev.tsx` — Dev console with AppShell sidebar: Overview, Users, Agents, Webhook Tokens, Webhook Monitor, App Logs, User Logs, Database (React Flow ER diagram), Project (10 sub-views — all React Flow with auto-save), Settings (SUPER_ADMIN only)
-  - `dashboard.tsx` — Admin dashboard with AppShell sidebar: Dashboard, Analytics, Orders, Messages, Calendar, Settings (ADMIN+)
-  - `profile.tsx` — User profile (all authenticated users, theme toggle in header)
+  - `dev.tsx` — Dev console with AppShell sidebar (SUPER_ADMIN only): Overview, Users, Agents, Webhook Tokens, Webhook Monitor, App Logs, User Logs, Database (React Flow ER diagram), Project (10 sub-views — all React Flow with auto-save)
+  - `admin.tsx` — Admin console (ADMIN + SUPER_ADMIN) — overview, users, analytics tabs
+  - `pm.tsx` — Project management shell (all authenticated users) — overview, projects, tasks, activity, team tabs
+  - `settings.tsx` — Profile/device/notification settings (all authenticated users)
+  - `dashboard.tsx` — Legacy redirect stub → `/admin`
+  - `profile.tsx` — Legacy redirect stub → `/settings`
   - `blocked.tsx` — Blocked user page with explanation (theme toggle top-right)
 - Components: `src/frontend/components/`
   - `ThemeToggle.tsx` — Shared dark/light mode toggle button (used across all pages)

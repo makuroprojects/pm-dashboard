@@ -21,13 +21,15 @@ async function main() {
     console.log(`Seeded: ${u.email} (${u.role})`)
   }
 
-  // Promote super admin emails from env
+  // Ensure super-admin emails from env exist and are promoted.
+  // Creates with empty password so Google OAuth path remains the only credential.
   for (const email of SUPER_ADMIN_EMAILS) {
-    const user = await prisma.user.findUnique({ where: { email } })
-    if (user && user.role !== 'SUPER_ADMIN') {
-      await prisma.user.update({ where: { email }, data: { role: 'SUPER_ADMIN' } })
-      console.log(`Promoted to SUPER_ADMIN: ${email}`)
-    }
+    await prisma.user.upsert({
+      where: { email },
+      update: { role: 'SUPER_ADMIN' },
+      create: { name: email.split('@')[0], email, password: '', role: 'SUPER_ADMIN' },
+    })
+    console.log(`Ensured SUPER_ADMIN: ${email}`)
   }
 }
 

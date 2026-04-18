@@ -4,7 +4,7 @@
       "command": "bunx",
       "args": ["@playwright/mcp@latest"]
     },
-    "app-mcp": {
+    "pm-dashboard": {
       "command": "bun",
       "args": ["run", "scripts/mcp/server.ts"],
       "env": {

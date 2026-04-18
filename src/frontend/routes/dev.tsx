@@ -60,7 +60,6 @@ import {
   TbLogout,
   TbRefresh,
   TbServer,
-  TbSettings,
   TbShieldCheck,
   TbShieldOff,
   TbSitemap,
@@ -88,7 +87,6 @@ const validTabs = [
   'user-logs',
   'database',
   'project',
-  'settings',
 ] as const
 
 export const Route = createFileRoute('/dev')({
@@ -134,7 +132,6 @@ const navItems = [
   { label: 'User Logs', icon: TbUserSearch, key: 'user-logs' },
   { label: 'Database', icon: TbDatabase, key: 'database' },
   { label: 'Project', icon: TbSitemap, key: 'project' },
-  { label: 'Settings', icon: TbSettings, key: 'settings' },
 ]
 
 function DevPage() {
@@ -310,9 +307,6 @@ function DevPage() {
         {active === 'user-logs' && <UserLogsPanel />}
         {active === 'database' && <DatabasePanel />}
         {active === 'project' && <ProjectPanel />}
-        {active === 'settings' && (
-          <PlaceholderPanel title="Settings" desc="System configuration akan ditampilkan di sini." icon={TbSettings} />
-        )}
       </AppShell.Main>
     </AppShell>
   )
@@ -3609,31 +3603,5 @@ function LiveRequestsFlowInner() {
         </ReactFlow>
       </div>
     </>
-  )
-}
-
-// ─── Placeholder Panel ─────────────────────────────────
-
-function PlaceholderPanel({
-  title,
-  desc,
-  icon: Icon,
-}: {
-  title: string
-  desc: string
-  icon: React.ComponentType<{ size: number }>
-}) {
-  return (
-    <Container size="lg">
-      <Stack align="center" justify="center" gap="md" mih={400}>
-        <ThemeIcon size={64} variant="light" color="gray" radius="xl">
-          <Icon size={32} />
-        </ThemeIcon>
-        <Title order={3}>{title}</Title>
-        <Text c="dimmed" ta="center" maw={400}>
-          {desc}
-        </Text>
-      </Stack>
-    </Container>
   )
 }

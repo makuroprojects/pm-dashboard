@@ -51,13 +51,15 @@ function LoginPage() {
               Login
             </Title>
 
-            <Text c="dimmed" size="sm" ta="center">
-              Super Admin: <strong>superadmin@example.com</strong> / <strong>superadmin123</strong>
-              <br />
-              Admin: <strong>admin@example.com</strong> / <strong>admin123</strong>
-              <br />
-              User: <strong>user@example.com</strong> / <strong>user123</strong>
-            </Text>
+            {import.meta.env.DEV && (
+              <Text c="dimmed" size="sm" ta="center">
+                Super Admin: <strong>superadmin@example.com</strong> / <strong>superadmin123</strong>
+                <br />
+                Admin: <strong>admin@example.com</strong> / <strong>admin123</strong>
+                <br />
+                User: <strong>user@example.com</strong> / <strong>user123</strong>
+              </Text>
+            )}
 
             {(login.isError || searchError) && (
               <Alert icon={<TbAlertCircle size={16} />} color="red" variant="light">

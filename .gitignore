@@ -43,3 +43,7 @@ uploads/
 .playwright-mcp/
 .claude/scheduled_tasks.lock
 /*.png
+
+# QA session cookies (contain live session tokens)
+qa/*/cookies/
+

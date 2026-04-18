@@ -64,7 +64,7 @@ describe('POST /webhooks/aw', () => {
     expect(res.status).toBe(400)
   })
 
-  test('upserts agent as PENDING and inserts events', async () => {
+  test('upserts agent as PENDING and drops events until approved', async () => {
     if (!TOKEN) return
     const events = [
       {
@@ -83,20 +83,31 @@ describe('POST /webhooks/aw', () => {
       },
     ]
     const res = await app.handle(req(payload(events)))
-    expect(res.status).toBe(200)
-    const body = (await res.json()) as { ok: boolean; inserted: number; agent: { status: string } }
+    expect(res.status).toBe(202)
+    const body = (await res.json()) as {
+      ok: boolean
+      inserted: number
+      skipped: number
+      reason?: string
+      agent: { status: string }
+    }
     expect(body.ok).toBe(true)
-    expect(body.inserted).toBe(2)
+    expect(body.inserted).toBe(0)
+    expect(body.skipped).toBe(2)
+    expect(body.reason).toBe('agent_pending')
     expect(body.agent.status).toBe('PENDING')
 
     const agent = await prisma.agent.findUnique({ where: { agentId: AGENT_ID } })
     expect(agent).not.toBeNull()
     expect(agent?.hostname).toBe('test-host')
     expect(agent?.osUser).toBe('tester')
+    const eventCount = await prisma.activityEvent.count({ where: { agentId: agent?.id } })
+    expect(eventCount).toBe(0)
   })
 
-  test('duplicate events are skipped via composite unique', async () => {
+  test('APPROVED agent ingests events; duplicates skipped via composite unique', async () => {
     if (!TOKEN) return
+    await prisma.agent.update({ where: { agentId: AGENT_ID }, data: { status: 'APPROVED' } })
     const events = [
       {
         bucket_id: 'aw-watcher-window_test-host',
@@ -113,10 +124,15 @@ describe('POST /webhooks/aw', () => {
         data: { app: 'Chrome' },
       },
     ]
-    const res = await app.handle(req(payload(events)))
-    const body = (await res.json()) as { inserted: number; skipped: number }
-    expect(body.inserted).toBe(1)
-    expect(body.skipped).toBe(1)
+    const first = await app.handle(req(payload(events)))
+    expect(first.status).toBe(200)
+    const firstBody = (await first.json()) as { inserted: number }
+    expect(firstBody.inserted).toBe(2)
+
+    const replay = await app.handle(req(payload([events[0]])))
+    const replayBody = (await replay.json()) as { inserted: number; skipped: number }
+    expect(replayBody.inserted).toBe(0)
+    expect(replayBody.skipped).toBe(1)
   })
 
   test('REVOKED agent is rejected (but still touched)', async () => {

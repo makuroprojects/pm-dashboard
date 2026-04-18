@@ -128,7 +128,8 @@ describe('Webhook auth via DB token', () => {
   test('active DB token is accepted', async () => {
     const raw = await createActiveToken()
     const res = await app.handle(webhookReq(raw))
-    expect(res.status).toBe(200)
+    // 202 = token accepted, agent PENDING (empty events or drops); either way token passed auth
+    expect([200, 202]).toContain(res.status)
   })
 
   test('disabled token returns 403', async () => {
@@ -204,8 +205,8 @@ describe('Token variants', () => {
         body: JSON.stringify({ agent_id: AGENT_ID, hostname: 'h', os_user: 'u', events: [] }),
       })
 
-    expect((await app.handle(webhookReq(a.raw))).status).toBe(200)
-    expect((await app.handle(webhookReq(b.raw))).status).toBe(200)
+    expect([200, 202]).toContain((await app.handle(webhookReq(a.raw))).status)
+    expect([200, 202]).toContain((await app.handle(webhookReq(b.raw))).status)
   })
 
   test('token with future expiry is accepted', async () => {
@@ -220,7 +221,7 @@ describe('Token variants', () => {
         body: JSON.stringify({ agent_id: AGENT_ID, hostname: 'h', os_user: 'u', events: [] }),
       }),
     )
-    expect(res.status).toBe(200)
+    expect([200, 202]).toContain(res.status)
   })
 
   test('rejects invalid expiresAt string', async () => {
@@ -290,7 +291,7 @@ describe('Token variants', () => {
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${created.raw}` },
         body: JSON.stringify({ agent_id: AGENT_ID, hostname: 'h', os_user: 'u', events: [] }),
       })
-    expect((await app.handle(webhookReq())).status).toBe(200)
+    expect([200, 202]).toContain((await app.handle(webhookReq())).status)
     await app.handle(
       new Request(`http://localhost/api/admin/webhook-tokens/${created.token.id}`, {
         method: 'DELETE',

@@ -20,6 +20,34 @@ function audit(userId: string | null, action: string, detail: string | null, ip:
   prisma.auditLog.create({ data: { userId, action, detail, ip } }).catch(() => {})
 }
 
+// In-memory login throttle: track recent failed attempts per IP.
+// Limit: 10 failed attempts per 15 minutes. Successful login clears the counter.
+const LOGIN_RATE_WINDOW_MS = 15 * 60 * 1000
+const LOGIN_RATE_MAX = 10
+const loginAttempts = new Map<string, number[]>()
+
+function loginAttemptsRemaining(ip: string): number {
+  const now = Date.now()
+  const arr = (loginAttempts.get(ip) ?? []).filter((t) => now - t < LOGIN_RATE_WINDOW_MS)
+  loginAttempts.set(ip, arr)
+  return Math.max(0, LOGIN_RATE_MAX - arr.length)
+}
+
+function recordLoginFailure(ip: string) {
+  const arr = loginAttempts.get(ip) ?? []
+  arr.push(Date.now())
+  loginAttempts.set(ip, arr)
+}
+
+function clearLoginAttempts(ip: string) {
+  loginAttempts.delete(ip)
+}
+
+function sessionCookie(value: string, maxAgeSec: number): string {
+  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : ''
+  return `session=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSec}${secure}`
+}
+
 async function requireAuth(request: Request): Promise<{ userId: string; role: string; email: string } | null> {
   const cookie = request.headers.get('cookie') ?? ''
   const token = cookie.match(/session=([^;]+)/)?.[1]
@@ -240,9 +268,28 @@ export function createApp() {
       // ─── Auth API ──────────────────────────────────────
       .post('/api/auth/login', async ({ request, set }) => {
         const ip = getIp(request)
-        const { email, password } = (await request.json()) as { email: string; password: string }
+        if (loginAttemptsRemaining(ip) === 0) {
+          audit(null, 'LOGIN_THROTTLED', null, ip)
+          appLog('warn', `Login throttled from ${ip}`, ip)
+          set.status = 429
+          return { error: 'Terlalu banyak percobaan login. Coba lagi beberapa menit.' }
+        }
+        let body: { email?: unknown; password?: unknown }
+        try {
+          body = (await request.json()) as typeof body
+        } catch {
+          set.status = 400
+          return { error: 'Invalid JSON' }
+        }
+        const email = typeof body?.email === 'string' ? body.email.trim() : ''
+        const password = typeof body?.password === 'string' ? body.password : ''
+        if (!email || !password) {
+          set.status = 400
+          return { error: 'email dan password wajib diisi' }
+        }
         let user = await prisma.user.findUnique({ where: { email } })
         if (!user || !(await Bun.password.verify(password, user.password))) {
+          recordLoginFailure(ip)
           audit(user?.id ?? null, 'LOGIN_FAILED', `email: ${email}`, ip)
           appLog('warn', `Login failed: ${email}`, ip)
           set.status = 401
@@ -258,10 +305,11 @@ export function createApp() {
         if (env.SUPER_ADMIN_EMAILS.includes(user.email) && user.role !== 'SUPER_ADMIN') {
           user = await prisma.user.update({ where: { id: user.id }, data: { role: 'SUPER_ADMIN' } })
         }
+        clearLoginAttempts(ip)
         const token = crypto.randomUUID()
         const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000) // 24 hours
         await prisma.session.create({ data: { token, userId: user.id, expiresAt } })
-        set.headers['set-cookie'] = `session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400`
+        set.headers['set-cookie'] = sessionCookie(token, 86400)
         audit(user.id, 'LOGIN', `via email`, ip)
         appLog('info', `Login: ${email} (${user.role})`, ip)
         return { user: { id: user.id, name: user.name, email: user.email, role: user.role } }
@@ -279,7 +327,7 @@ export function createApp() {
           }
           await prisma.session.deleteMany({ where: { token } })
         }
-        set.headers['set-cookie'] = 'session=; Path=/; HttpOnly; Max-Age=0'
+        set.headers['set-cookie'] = sessionCookie('', 0)
         return { ok: true }
       })
 
@@ -383,7 +431,7 @@ export function createApp() {
         const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000)
         await prisma.session.create({ data: { token, userId: user.id, expiresAt } })
 
-        set.headers['set-cookie'] = `session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400`
+        set.headers['set-cookie'] = sessionCookie(token, 86400)
         audit(user.id, 'LOGIN', 'via Google OAuth', ip)
         appLog('info', `Login (Google): ${googleUser.email} (${user.role})`, ip)
         const defaultRoute = user.role === 'SUPER_ADMIN' || user.role === 'ADMIN' ? '/admin' : '/pm'
@@ -1138,6 +1186,13 @@ export function createApp() {
             description: 'Update task fields (member only; status transitions enforced)',
           },
           {
+            method: 'DELETE',
+            path: '/api/tasks/:id',
+            auth: 'authenticated',
+            category: 'tasks',
+            description: 'Delete task (OWNER/PM or SUPER_ADMIN)',
+          },
+          {
             method: 'POST',
             path: '/api/tasks/:id/comments',
             auth: 'authenticated',
@@ -1150,6 +1205,48 @@ export function createApp() {
             auth: 'authenticated',
             category: 'tasks',
             description: 'Attach evidence to task (member only)',
+          },
+          {
+            method: 'POST',
+            path: '/api/tasks/:id/evidence/upload',
+            auth: 'authenticated',
+            category: 'tasks',
+            description: 'Upload evidence file (multipart; max UPLOAD_MAX_BYTES)',
+          },
+          {
+            method: 'GET',
+            path: '/api/evidence/:file',
+            auth: 'authenticated',
+            category: 'tasks',
+            description: "Stream evidence file (member of owning task's project)",
+          },
+          {
+            method: 'GET',
+            path: '/api/projects/:id/github/summary',
+            auth: 'authenticated',
+            category: 'github',
+            description: 'GitHub repo stats for project (commits/contributors/openPRs/lastPush)',
+          },
+          {
+            method: 'GET',
+            path: '/api/projects/:id/github/feed',
+            auth: 'authenticated',
+            category: 'github',
+            description: 'Paginated GitHub events for project (?limit=&kind=)',
+          },
+          {
+            method: 'POST',
+            path: '/webhooks/github',
+            auth: 'hmac',
+            category: 'github',
+            description: 'GitHub webhook ingestion (HMAC SHA-256 via GITHUB_WEBHOOK_SECRET)',
+          },
+          {
+            method: 'POST',
+            path: '/mcp',
+            auth: 'shared-secret',
+            category: 'mcp',
+            description: 'MCP HTTP fallback (Bearer MCP_SECRET readonly / MCP_SECRET_ADMIN full)',
           },
           {
             method: 'GET',
@@ -1552,6 +1649,70 @@ export function createApp() {
             default: '7',
             category: 'app',
             description: 'Days to keep /webhooks/aw request logs',
+          },
+          {
+            name: 'MCP_SECRET',
+            envKey: 'MCP_SECRET',
+            required: false,
+            default: '(empty)',
+            category: 'mcp',
+            description: 'Shared secret for readonly MCP tools (local server + /mcp HTTP)',
+          },
+          {
+            name: 'MCP_SECRET_ADMIN',
+            envKey: 'MCP_SECRET_ADMIN',
+            required: false,
+            default: '(empty)',
+            category: 'mcp',
+            description: 'Shared secret for admin/write MCP tools',
+          },
+          {
+            name: 'PMW_WEBHOOK_TOKEN',
+            envKey: 'PMW_WEBHOOK_TOKEN',
+            required: false,
+            default: '(empty)',
+            category: 'webhooks',
+            description: 'Fallback bearer token for /webhooks/aw when no DB tokens are active',
+          },
+          {
+            name: 'PMW_EVENT_BATCH_MAX',
+            envKey: 'PMW_EVENT_BATCH_MAX',
+            required: false,
+            default: '500',
+            category: 'webhooks',
+            description: 'Max events per /webhooks/aw request (413 on overflow)',
+          },
+          {
+            name: 'GITHUB_WEBHOOK_SECRET',
+            envKey: 'GITHUB_WEBHOOK_SECRET',
+            required: false,
+            default: '(empty)',
+            category: 'webhooks',
+            description: 'HMAC SHA-256 secret for /webhooks/github signature verification',
+          },
+          {
+            name: 'UPLOADS_DIR',
+            envKey: 'UPLOADS_DIR',
+            required: false,
+            default: './uploads',
+            category: 'app',
+            description: 'Local directory for task evidence uploads',
+          },
+          {
+            name: 'UPLOAD_MAX_BYTES',
+            envKey: 'UPLOAD_MAX_BYTES',
+            required: false,
+            default: '10485760',
+            category: 'app',
+            description: 'Max evidence upload size in bytes (default 10 MiB)',
+          },
+          {
+            name: 'DIRECT_URL',
+            envKey: 'DIRECT_URL',
+            required: false,
+            default: '(same as DATABASE_URL)',
+            category: 'database',
+            description: 'Prisma direct URL (bypasses connection pool for migrations)',
           },
         ]
 
@@ -2362,10 +2523,15 @@ export function createApp() {
           set.status = 403
           return { error: 'Only OWNER can grant OWNER role' }
         }
-        const member = await prisma.projectMember.upsert({
+        const existingMember = await prisma.projectMember.findUnique({
           where: { projectId_userId: { projectId: params.id, userId: body.userId } },
-          update: { role },
-          create: { projectId: params.id, userId: body.userId, role },
+        })
+        if (existingMember) {
+          set.status = 409
+          return { error: 'User is already a member of this project' }
+        }
+        const member = await prisma.projectMember.create({
+          data: { projectId: params.id, userId: body.userId, role },
           include: { user: { select: { id: true, name: true, email: true, role: true } } },
         })
         audit(auth.userId, 'PROJECT_MEMBER_ADDED', `${params.id} ← ${body.userId} (${role})`, getIp(request))
@@ -2638,8 +2804,24 @@ export function createApp() {
           }
           where.projectId = String(query.projectId)
         }
-        if (query.status) where.status = String(query.status)
-        if (query.kind) where.kind = String(query.kind)
+        const TASK_STATUS_VALUES = ['OPEN', 'IN_PROGRESS', 'READY_FOR_QC', 'REOPENED', 'CLOSED'] as const
+        const TASK_KIND_VALUES = ['TASK', 'BUG', 'QC'] as const
+        if (query.status) {
+          const s = String(query.status)
+          if (!(TASK_STATUS_VALUES as readonly string[]).includes(s)) {
+            set.status = 400
+            return { error: `status must be one of: ${TASK_STATUS_VALUES.join(', ')}` }
+          }
+          where.status = s
+        }
+        if (query.kind) {
+          const k = String(query.kind)
+          if (!(TASK_KIND_VALUES as readonly string[]).includes(k)) {
+            set.status = 400
+            return { error: `kind must be one of: ${TASK_KIND_VALUES.join(', ')}` }
+          }
+          where.kind = k
+        }
         if (query.assigneeId) where.assigneeId = String(query.assigneeId)
         if (query.mine === '1') where.assigneeId = auth.userId
 
@@ -2691,10 +2873,24 @@ export function createApp() {
           set.status = 400
           return { error: 'projectId, title, description wajib diisi' }
         }
+        if (body.title.length > 500) {
+          set.status = 400
+          return { error: 'Title must be 500 characters or fewer' }
+        }
         const membership = await requireProjectMember(body.projectId, auth.userId)
         if (!membership || membership.role === 'VIEWER') {
           set.status = 403
           return { error: 'Not a writable project member' }
+        }
+        if (body.tagIds?.length) {
+          const validTags = await prisma.tag.findMany({
+            where: { id: { in: body.tagIds }, projectId: body.projectId },
+            select: { id: true },
+          })
+          if (validTags.length !== body.tagIds.length) {
+            set.status = 400
+            return { error: 'One or more tagIds do not exist in this project' }
+          }
         }
         const task = await prisma.task.create({
           data: {
@@ -2812,6 +3008,10 @@ export function createApp() {
           progressPercent?: number | null
           tagIds?: string[]
         }
+        if (body.title !== undefined && body.title.length > 500) {
+          set.status = 400
+          return { error: 'Title must be 500 characters or fewer' }
+        }
         const data: Record<string, unknown> = {}
         if (body.title !== undefined) data.title = body.title
         if (body.description !== undefined) data.description = body.description
@@ -2893,6 +3093,30 @@ export function createApp() {
           }).catch(() => {})
         }
         return { task }
+      })
+
+      .delete('/api/tasks/:id', async ({ request, params, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const current = await prisma.task.findUnique({ where: { id: params.id } })
+        if (!current) {
+          set.status = 404
+          return { error: 'Task not found' }
+        }
+        if (auth.role !== 'SUPER_ADMIN') {
+          const membership = await requireProjectMember(current.projectId, auth.userId)
+          if (!membership || (membership.role !== 'OWNER' && membership.role !== 'PM')) {
+            set.status = 403
+            return { error: 'Only project OWNER/PM can delete tasks' }
+          }
+        }
+        await prisma.task.delete({ where: { id: params.id } })
+        audit(auth.userId, 'TASK_DELETED', `#${current.id} "${current.title}"`, getIp(request))
+        appLog('info', `Task deleted: #${current.id} by ${auth.userId}`)
+        return { ok: true }
       })
 
       .post('/api/tasks/:id/comments', async ({ request, params, set }) => {
@@ -3203,6 +3427,25 @@ export function createApp() {
         if (!blocker || blocker.projectId !== task.projectId) {
           set.status = 400
           return { error: 'Blocker task must be in the same project' }
+        }
+        // Cycle check: if params.id is transitively blocked by body.blockedById already
+        // (i.e. there exists a dep path body.blockedById → ... → params.id), adding the
+        // reverse edge would create a cycle. Walk via blockedById and bail if we hit params.id.
+        const visited = new Set<string>()
+        const queue: string[] = [body.blockedById]
+        while (queue.length) {
+          const cur = queue.shift() as string
+          if (visited.has(cur)) continue
+          visited.add(cur)
+          if (cur === params.id) {
+            set.status = 400
+            return { error: 'Dependency would create a cycle' }
+          }
+          const parents = await prisma.taskDependency.findMany({
+            where: { taskId: cur },
+            select: { blockedById: true },
+          })
+          for (const p of parents) queue.push(p.blockedById)
         }
         const dep = await prisma.taskDependency
           .create({ data: { taskId: params.id, blockedById: body.blockedById } })
@@ -3694,6 +3937,23 @@ export function createApp() {
           return { error: 'Agent revoked' }
         }
 
+        if (agent.status === 'PENDING') {
+          appLog(
+            'info',
+            `pm-watch events from PENDING agent ${agent_id} dropped (awaiting approval): received=${body.events.length}`,
+          )
+          logRequest(202, 'agent_pending', auth.tokenId, agent.id, body.events.length)
+          set.status = 202
+          return {
+            ok: true,
+            agent: { id: agent.id, status: agent.status, claimed: false },
+            received: body.events.length,
+            inserted: 0,
+            skipped: body.events.length,
+            reason: 'agent_pending',
+          }
+        }
+
         const rows = body.events.flatMap((e) => {
           if (!e.bucket_id || typeof e.event_id !== 'number' || !e.timestamp || typeof e.duration !== 'number')
             return []
@@ -3909,23 +4169,46 @@ export function createApp() {
           for (const r of rows) {
             if (r.actorEmail) r.matchedUserId = emailToUser.get(r.actorEmail.toLowerCase()) ?? null
           }
-          const { count } = await prisma.projectGithubEvent.createMany({
-            data: rows.map((r) => ({
-              projectId: r.projectId,
-              kind: r.kind,
-              actorLogin: r.actorLogin,
-              actorEmail: r.actorEmail,
-              matchedUserId: r.matchedUserId,
-              title: r.title,
-              url: r.url,
-              sha: r.sha,
-              prNumber: r.prNumber,
-              metadata: r.metadata ?? undefined,
-              createdAt: r.createdAt,
-            })),
-            skipDuplicates: true,
+
+          // Postgres treats NULL prNumber as distinct on the unique index, so `skipDuplicates`
+          // misses PUSH_COMMIT replays. Pre-filter against existing (projectId, sha) pairs.
+          const pushShas = rows.filter((r) => r.kind === 'PUSH_COMMIT' && r.sha).map((r) => r.sha as string)
+          const existingShas = pushShas.length
+            ? new Set(
+                (
+                  await prisma.projectGithubEvent.findMany({
+                    where: { projectId: project.id, kind: 'PUSH_COMMIT', sha: { in: pushShas } },
+                    select: { sha: true },
+                  })
+                )
+                  .map((r) => r.sha)
+                  .filter((s): s is string => !!s),
+              )
+            : new Set<string>()
+          const dedupedRows = rows.filter((r) => {
+            if (r.kind !== 'PUSH_COMMIT' || !r.sha) return true
+            return !existingShas.has(r.sha)
           })
-          inserted = count
+
+          if (dedupedRows.length > 0) {
+            const { count } = await prisma.projectGithubEvent.createMany({
+              data: dedupedRows.map((r) => ({
+                projectId: r.projectId,
+                kind: r.kind,
+                actorLogin: r.actorLogin,
+                actorEmail: r.actorEmail,
+                matchedUserId: r.matchedUserId,
+                title: r.title,
+                url: r.url,
+                sha: r.sha,
+                prNumber: r.prNumber,
+                metadata: r.metadata ?? undefined,
+                createdAt: r.createdAt,
+              })),
+              skipDuplicates: true,
+            })
+            inserted = count
+          }
         }
 
         appLog(
@@ -4084,6 +4367,11 @@ export function createApp() {
           set.status = 404
           return { error: 'User tidak ditemukan' }
         }
+        const existing = await prisma.agent.findUnique({ where: { id: params.id }, select: { id: true } })
+        if (!existing) {
+          set.status = 404
+          return { error: 'Agent tidak ditemukan' }
+        }
         const agent = await prisma.agent.update({
           where: { id: params.id },
           data: { status: 'APPROVED', claimedById: user.id },
@@ -4107,6 +4395,11 @@ export function createApp() {
         if (auth.role !== 'SUPER_ADMIN') {
           set.status = 403
           return { error: 'Forbidden' }
+        }
+        const existing = await prisma.agent.findUnique({ where: { id: params.id }, select: { id: true } })
+        if (!existing) {
+          set.status = 404
+          return { error: 'Agent tidak ditemukan' }
         }
         const agent = await prisma.agent.update({
           where: { id: params.id },
@@ -4217,33 +4510,62 @@ export function createApp() {
           set.status = 403
           return { error: 'Forbidden' }
         }
-        let body: { status?: 'ACTIVE' | 'DISABLED' | 'REVOKED' }
+        let body: { status?: 'ACTIVE' | 'DISABLED' | 'REVOKED'; name?: string }
         try {
           body = (await request.json()) as typeof body
         } catch {
           set.status = 400
           return { error: 'Invalid JSON' }
         }
-        if (!body.status || !['ACTIVE', 'DISABLED', 'REVOKED'].includes(body.status)) {
+        const data: { status?: 'ACTIVE' | 'DISABLED' | 'REVOKED'; name?: string } = {}
+        if (body.status !== undefined) {
+          if (!['ACTIVE', 'DISABLED', 'REVOKED'].includes(body.status)) {
+            set.status = 400
+            return { error: 'status must be ACTIVE | DISABLED | REVOKED' }
+          }
+          data.status = body.status
+        }
+        if (body.name !== undefined) {
+          const trimmed = body.name.trim()
+          if (!trimmed) {
+            set.status = 400
+            return { error: 'name tidak boleh kosong' }
+          }
+          data.name = trimmed
+        }
+        if (Object.keys(data).length === 0) {
           set.status = 400
-          return { error: 'status must be ACTIVE | DISABLED | REVOKED' }
+          return { error: 'Provide status and/or name' }
         }
         const existing = await prisma.webhookToken.findUnique({ where: { id: params.id } })
         if (!existing) {
           set.status = 404
           return { error: 'Token not found' }
         }
-        if (existing.status === 'REVOKED') {
+        if (data.status && existing.status === 'REVOKED') {
           set.status = 400
           return { error: 'Revoked tokens cannot be reactivated' }
         }
-        const token = await prisma.webhookToken.update({
+        const updated = await prisma.webhookToken.update({
           where: { id: params.id },
-          data: { status: body.status },
+          data,
+          include: { createdBy: { select: { id: true, name: true, email: true } } },
         })
-        audit(auth.userId, `WEBHOOK_TOKEN_${body.status}`, `token=${token.name} prefix=${token.tokenPrefix}`, ip)
-        appLog('info', `Webhook token ${body.status}: ${token.name} (${token.tokenPrefix})`)
-        return { token }
+        const auditAction = data.status ? `WEBHOOK_TOKEN_${data.status}` : 'WEBHOOK_TOKEN_RENAMED'
+        audit(auth.userId, auditAction, `token=${updated.name} prefix=${updated.tokenPrefix}`, ip)
+        appLog('info', `Webhook token ${auditAction}: ${updated.name} (${updated.tokenPrefix})`)
+        return {
+          token: {
+            id: updated.id,
+            name: updated.name,
+            tokenPrefix: updated.tokenPrefix,
+            status: updated.status,
+            expiresAt: updated.expiresAt,
+            lastUsedAt: updated.lastUsedAt,
+            createdBy: updated.createdBy,
+            createdAt: updated.createdAt,
+          },
+        }
       })
       .delete('/api/admin/webhook-tokens/:id', async ({ request, params, set }) => {
         const ip = getIp(request)
@@ -4256,11 +4578,12 @@ export function createApp() {
           set.status = 403
           return { error: 'Forbidden' }
         }
-        const token = await prisma.webhookToken.delete({ where: { id: params.id } }).catch(() => null)
-        if (!token) {
+        const existing = await prisma.webhookToken.findUnique({ where: { id: params.id } })
+        if (!existing) {
           set.status = 404
           return { error: 'Token not found' }
         }
+        const token = await prisma.webhookToken.delete({ where: { id: params.id } })
         audit(auth.userId, 'WEBHOOK_TOKEN_DELETED', `token=${token.name} prefix=${token.tokenPrefix}`, ip)
         appLog('info', `Webhook token deleted: ${token.name} (${token.tokenPrefix})`)
         return { ok: true }
