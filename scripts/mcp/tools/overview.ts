@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { prisma } from '../../../src/lib/db'
 import { computePhantomWork, computeTaskEffort, detectGhostTasks, effortReport } from '../../../src/lib/effort'
+import { computeRetro, renderRetroMarkdown } from '../../../src/lib/retro'
 import { jsonText, type ToolModule } from './shared'
 
 const LIVE_MS = 5 * 60 * 1000
@@ -550,6 +551,36 @@ export const overviewReadonly: ToolModule = {
       async ({ days, limit }) => {
         const rows = await computePhantomWork({ days, limit })
         return jsonText({ count: rows.length, days, rows })
+      },
+    )
+
+    server.registerTool(
+      'project_retro',
+      {
+        title: 'Automated retrospective',
+        description:
+          'Generate a retrospective for a project over a time window. Joins closed/slipped/blocked tasks + extensions + GitHub activity + top contributors. Returns markdown by default (paste-ready for docs/standup).',
+        inputSchema: {
+          projectId: z.string(),
+          days: z.number().int().min(1).max(180).default(14).describe('Window length in days ending now'),
+          since: z.string().optional().describe('ISO timestamp; overrides days if provided'),
+          until: z.string().optional().describe('ISO timestamp; defaults to now'),
+          format: z.enum(['markdown', 'json']).default('markdown'),
+        },
+      },
+      async ({ projectId, days, since, until, format }) => {
+        const now = new Date()
+        const untilDate = until ? new Date(until) : now
+        const sinceDate = since
+          ? new Date(since)
+          : new Date(untilDate.getTime() - days * 24 * 60 * 60 * 1000)
+        if (Number.isNaN(sinceDate.getTime()) || Number.isNaN(untilDate.getTime()) || untilDate <= sinceDate) {
+          return jsonText({ error: 'Invalid since/until' })
+        }
+        const retro = await computeRetro({ projectId, since: sinceDate, until: untilDate })
+        if (!retro) return jsonText({ error: 'Project not found' })
+        if (format === 'markdown') return jsonText(renderRetroMarkdown(retro))
+        return jsonText(retro)
       },
     )
   },

@@ -11,6 +11,7 @@ import { normalizeGithubRepo, verifyGithubSignature } from './lib/github'
 import { notifyTaskAssigned, notifyTaskCommented, notifyTaskStatusChanged } from './lib/notifications'
 import { addConnection, broadcastToAdmins, getOnlineUserIds, removeConnection } from './lib/presence'
 import { redis } from './lib/redis'
+import { computeRetro, renderRetroMarkdown } from './lib/retro'
 import { parseSchema } from './lib/schema-parser'
 import { generateWebhookToken, verifyWebhookToken } from './lib/webhook-tokens'
 
@@ -2740,6 +2741,38 @@ export function createApp() {
           include: { matchedUser: { select: { id: true, name: true, email: true } } },
         })
         return { events }
+      })
+
+      // ─── Retrospective ───────────────────────────────
+      .get('/api/projects/:id/retro', async ({ request, params, query, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const membership = await requireProjectMember(params.id, auth.userId)
+        if (!membership && auth.role !== 'SUPER_ADMIN' && auth.role !== 'ADMIN') {
+          set.status = 403
+          return { error: 'Not a project member' }
+        }
+        const now = Date.now()
+        const defaultSince = new Date(now - 14 * 24 * 60 * 60 * 1000)
+        const since = typeof query.since === 'string' ? new Date(query.since) : defaultSince
+        const until = typeof query.until === 'string' ? new Date(query.until) : new Date(now)
+        if (Number.isNaN(since.getTime()) || Number.isNaN(until.getTime()) || until <= since) {
+          set.status = 400
+          return { error: 'Invalid since/until' }
+        }
+        const retro = await computeRetro({ projectId: params.id, since, until })
+        if (!retro) {
+          set.status = 404
+          return { error: 'Project not found' }
+        }
+        if (query.format === 'md' || query.format === 'markdown') {
+          set.headers['content-type'] = 'text/markdown; charset=utf-8'
+          return renderRetroMarkdown(retro)
+        }
+        return retro
       })
 
       .post('/api/projects/:id/members', async ({ request, params, set }) => {

@@ -127,6 +127,19 @@ Evidence-based effort attribution: correlates pm-watch `ActivityEvent` rows (Act
 - **MCP tools** (readonly, in `overview.ts`): `effort_report`, `task_effort`, `ghost_tasks`, `phantom_work`.
 - **Bucket filter**: events are filtered by `bucketId` containing `"window"` (i.e. `aw-watcher-window_*`). AFK-bucket events are ignored. Duration is AW-native seconds.
 
+## Retrospectives
+
+Automated per-project retrospective generator. Given a project and a time window, produces a structured snapshot (shipped, slipped, biggest misses, still blocked, deadline pushes, GitHub activity, top contributors) plus a renderable markdown draft a PM can paste into a doc or read aloud in standup.
+
+- **Helpers**: `src/lib/retro.ts`
+  - `computeRetro({ projectId, since, until? })` — returns `RetroResult | null`. Runs 7 parallel Prisma queries (closed, dueAt-in-window, still-blocked, new-tasks count, extensions, GitHub groupBy `kind`, CLOSED status-changes) + one groupBy on `ProjectGithubEvent` by `(matchedUserId, kind)` for contributor attribution. Slipped = `!closedAt || closedAt > dueAt`. Biggest misses = top 5 by `daysOverDue`.
+  - `renderRetroMarkdown(retro)` — formats to markdown with TL;DR, Shipped, Slipped, Biggest misses, Still blocked, Deadline pushes, Top contributors sections.
+- **API** (project member OR ADMIN/SUPER_ADMIN):
+  - `GET /api/projects/:id/retro` — JSON result. `since`/`until` query params (ISO); defaults to last 14 days. 400 on invalid dates. 404 on unknown project. 403 for non-member non-admin.
+  - `GET /api/projects/:id/retro?format=md` — renders markdown with `text/markdown` content-type.
+- **Frontend**: Project detail **Retro tab** (`ProjectDetailView.tsx` → `RetroTab.tsx`). SegmentedControl over 7d/14d/30d/90d windows. 6 summary cards (Shipped / Slipped / Still blocked / New tasks / Extensions / Commits) + GitHub activity card (conditional) + sections for each list + Top contributors card. "Copy markdown" via `<CopyButton>`, "Download .md" via Blob URL. Markdown fetched lazily via separate `useQuery` (`enabled: !!data`).
+- **MCP tool** (readonly, in `overview.ts`): `project_retro` — accepts `projectId`, `days` (default 14), `since`, `until`, `format: 'markdown' | 'json'` (default markdown).
+
 ## GitHub Integration
 
 Projects can be linked 1:1 to a GitHub repo via `Project.githubRepo` (stored canonical `owner/repo`). GitHub pushes/PRs/reviews flow in via webhook and are surfaced as project-level activity without requiring commit-message conventions.
@@ -153,12 +166,13 @@ Projects can be linked 1:1 to a GitHub repo via `Project.githubRepo` (stored can
 Local MCP server lets Claude drive the app remotely. `.mcp.json` registers `pm-dashboard` (runs `scripts/mcp/server.ts`) alongside `playwright`. Requires `MCP_SECRET`; `MCP_SECRET_ADMIN` unlocks write/dev tools.
 
 - Entry: `scripts/mcp/server.ts` + `scripts/mcp/test-client.ts`
-- Tool modules (`scripts/mcp/tools/`): `admin`, `agents`, `code`, `db`, `dev`, `github`, `health`, `logs`, `milestones`, `overview`, `presence`, `project`, `projects`, `redis`, `tasks`, `webhooks` (16 modules, 79 tools). `shared.ts` is a helper, not a tool module.
+- Tool modules (`scripts/mcp/tools/`): `admin`, `agents`, `code`, `db`, `dev`, `github`, `health`, `logs`, `milestones`, `overview`, `presence`, `project`, `projects`, `redis`, `tasks`, `webhooks` (16 modules, 80 tools). `shared.ts` is a helper, not a tool module.
 - Agent tools: `agent_list`, `agent_get` (readonly); `agent_approve`, `agent_revoke`, `agent_reassign` (admin)
 - Webhook tools: `webhook_token_list`, `webhook_stats`, `webhook_logs` (readonly); `webhook_token_create` (returns plaintext once), `webhook_token_toggle`, `webhook_token_revoke` (admin)
 - GitHub tools (readonly): `github_summary`, `github_feed`, `github_webhook_logs` — all accept project id, name, or `owner/repo`
 - Overview tools (readonly): `admin_overview` (KPIs across users/projects/tasks/agents/webhooks), `project_health` (per-project score A-F from overdue/blocked/extensions/velocity), `team_load` (per-user open/overdue/estimated hours, flags overloaded), `risk_report` (overdue tasks + stale IN_PROGRESS + past-due projects + pending agents + offline agents + missing env, severity rolled up)
 - Effort tools (readonly, in `overview` module): `effort_report` (estimate vs actual for many tasks), `task_effort` (single task detail), `ghost_tasks` (stalled IN_PROGRESS with user-online signal), `phantom_work` (per-user untracked activity)
+- Retro tool (readonly, in `overview` module): `project_retro` (automated retrospective snapshot — markdown by default, JSON optional)
 - HTTP fallback: `POST /mcp` — readonly with `MCP_SECRET`, full with `MCP_SECRET_ADMIN`
 
 ## WebSocket

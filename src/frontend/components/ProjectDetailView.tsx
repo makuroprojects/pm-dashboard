@@ -37,6 +37,7 @@ import {
   TbHistory,
   TbListCheck,
   TbRefresh,
+  TbReport,
   TbSettings,
   TbTarget,
   TbTrash,
@@ -52,9 +53,18 @@ import {
   type ProjectPriority,
   type ProjectStatus,
 } from './ProjectsPanel'
+import { RetroTab } from './RetroTab'
 import { TasksPanel } from './TasksPanel'
 
-export const PROJECT_DETAIL_TABS = ['overview', 'tasks', 'team', 'milestones', 'extensions', 'settings'] as const
+export const PROJECT_DETAIL_TABS = [
+  'overview',
+  'tasks',
+  'team',
+  'milestones',
+  'extensions',
+  'retro',
+  'settings',
+] as const
 export type ProjectDetailTab = (typeof PROJECT_DETAIL_TABS)[number]
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -223,6 +233,9 @@ export function ProjectDetailView({
               <Tabs.Tab value="extensions" leftSection={<TbHistory size={14} />}>
                 Extensions
               </Tabs.Tab>
+              <Tabs.Tab value="retro" leftSection={<TbReport size={14} />}>
+                Retro
+              </Tabs.Tab>
               <Tabs.Tab value="settings" leftSection={<TbSettings size={14} />}>
                 Settings
               </Tabs.Tab>
@@ -252,6 +265,9 @@ export function ProjectDetailView({
                 startsAt={project.startsAt}
                 canExtend={computeCanManage(project.myRole, systemRole)}
               />
+            </Tabs.Panel>
+            <Tabs.Panel value="retro" pt="md">
+              <RetroTab projectId={project.id} />
             </Tabs.Panel>
             <Tabs.Panel value="settings" pt="md">
               <SettingsTab
