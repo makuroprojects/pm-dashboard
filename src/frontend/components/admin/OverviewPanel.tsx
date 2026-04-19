@@ -351,37 +351,41 @@ export function OverviewPanel() {
       <SimpleGrid cols={{ base: 1, sm: 2, md: 4 }} spacing="md">
         <KpiCard
           label="Total Users"
-          value={loading ? '—' : stats.totalUsers}
+          value={stats.totalUsers}
           sub={stats.blocked > 0 ? `${stats.blocked} blocked` : 'none blocked'}
           subColor={stats.blocked > 0 ? 'red' : undefined}
           icon={TbUsersGroup}
           color="violet"
           onClick={() => navigate({ to: '/admin', search: { tab: 'users' } })}
+          loading={loading}
         />
         <KpiCard
           label="Active Projects"
-          value={loading ? '—' : stats.activeProjects}
+          value={stats.activeProjects}
           sub={`of ${stats.totalProjects} total`}
           icon={TbTarget}
           color="blue"
           onClick={() => navigate({ to: '/admin', search: { tab: 'projects' } })}
+          loading={loading}
         />
         <KpiCard
           label="Open Tasks"
-          value={loading ? '—' : stats.openTasks}
+          value={stats.openTasks}
           sub={stats.overdueTasks > 0 ? `${stats.overdueTasks} overdue` : 'none overdue'}
           subColor={stats.overdueTasks > 0 ? 'red' : undefined}
           icon={TbListCheck}
           color="red"
           onClick={() => navigate({ to: '/admin', search: { tab: 'tasks' } })}
+          loading={loading}
         />
         <KpiCard
           label="Live Agents"
-          value={loading ? '—' : stats.liveAgents}
+          value={stats.liveAgents}
           sub={stats.pendingAgents > 0 ? `${stats.pendingAgents} pending approval` : 'all approved'}
           subColor={stats.pendingAgents > 0 ? 'orange' : undefined}
           icon={TbPlugConnected}
           color="teal"
+          loading={loading}
         />
       </SimpleGrid>
 
@@ -393,16 +397,31 @@ export function OverviewPanel() {
 
       {healthQ.isLoading ? (
         <SectionSkeleton height={180} />
-      ) : (
-        healthQ.data &&
-        healthQ.data.projects.length > 0 && <PortfolioHealthSection rows={healthQ.data.projects} navigate={navigate} />
-      )}
+      ) : healthQ.data && healthQ.data.projects.length > 0 ? (
+        <PortfolioHealthSection rows={healthQ.data.projects} navigate={navigate} />
+      ) : healthQ.data ? (
+        <EmptyStateCard
+          icon={TbHeartbeat}
+          color="blue"
+          title="Portfolio health"
+          message="Belum ada project aktif. Buat project untuk melihat skor kesehatan A–F."
+          ctaLabel="Buka Projects"
+          onCta={() => navigate({ to: '/admin', search: { tab: 'projects' } })}
+        />
+      ) : null}
 
       {loadQ.isLoading ? (
         <SectionSkeleton height={160} />
-      ) : (
-        loadQ.data && loadQ.data.rows.length > 0 && <TeamLoadSection rows={loadQ.data.rows} />
-      )}
+      ) : loadQ.data && loadQ.data.rows.length > 0 ? (
+        <TeamLoadSection rows={loadQ.data.rows} />
+      ) : loadQ.data ? (
+        <EmptyStateCard
+          icon={TbUsersGroup}
+          color="violet"
+          title="Team load"
+          message="Belum ada task aktif yang di-assign. Team load akan muncul saat user punya beban kerja."
+        />
+      ) : null}
 
       <Card withBorder padding="md" radius="md">
         <Stack gap="sm">
@@ -415,6 +434,17 @@ export function OverviewPanel() {
               last 8 entries
             </Text>
           </Group>
+          {auditQ.isLoading && (
+            <Stack gap="xs">
+              {['a', 'b', 'c', 'd'].map((k) => (
+                <Group key={k} gap="sm" wrap="nowrap">
+                  <Skeleton height={18} width={80} radius="sm" />
+                  <Skeleton height={14} style={{ flex: 1 }} radius="sm" />
+                  <Skeleton height={12} width={50} radius="sm" />
+                </Group>
+              ))}
+            </Stack>
+          )}
           {logs.length === 0 && !auditQ.isLoading && (
             <Text size="sm" c="dimmed" ta="center" py="md">
               Belum ada aktivitas.
@@ -475,34 +505,83 @@ function KpiCard({
   icon: Icon,
   color,
   onClick,
+  loading,
 }: {
   label: string
-  value: string | number
+  value: number
   sub?: string
   subColor?: string
   icon: typeof TbUsers
   color: string
   onClick?: () => void
+  loading?: boolean
 }) {
   return (
     <Card withBorder padding="lg" radius="md" style={onClick ? { cursor: 'pointer' } : undefined} onClick={onClick}>
       <Group justify="space-between" align="flex-start" wrap="nowrap">
-        <Stack gap={2} style={{ minWidth: 0 }}>
+        <Stack gap={2} style={{ minWidth: 0, flex: 1 }}>
           <Text size="xs" c="dimmed" fw={500} tt="uppercase">
             {label}
           </Text>
-          <Text fw={700} size="xl">
-            {value}
-          </Text>
-          {sub && (
-            <Text size="xs" c={subColor ?? 'dimmed'}>
-              {sub}
+          {loading ? (
+            <Skeleton height={28} width={60} radius="sm" my={2} />
+          ) : (
+            <Text fw={700} size="xl">
+              {value}
             </Text>
+          )}
+          {loading ? (
+            <Skeleton height={12} width={100} radius="sm" />
+          ) : (
+            sub && (
+              <Text size="xs" c={subColor ?? 'dimmed'}>
+                {sub}
+              </Text>
+            )
           )}
         </Stack>
         <ThemeIcon variant="light" color={color} size="lg" radius="md">
           <Icon size={20} />
         </ThemeIcon>
+      </Group>
+    </Card>
+  )
+}
+
+function EmptyStateCard({
+  icon: Icon,
+  color,
+  title,
+  message,
+  ctaLabel,
+  onCta,
+}: {
+  icon: typeof TbUsers
+  color: string
+  title: string
+  message: string
+  ctaLabel?: string
+  onCta?: () => void
+}) {
+  return (
+    <Card withBorder padding="md" radius="md">
+      <Group gap="sm" align="flex-start" wrap="nowrap">
+        <ThemeIcon variant="light" color={color} size="md" radius="md">
+          <Icon size={16} />
+        </ThemeIcon>
+        <Stack gap={2} style={{ flex: 1, minWidth: 0 }}>
+          <Text size="sm" fw={600}>
+            {title}
+          </Text>
+          <Text size="xs" c="dimmed">
+            {message}
+          </Text>
+        </Stack>
+        {ctaLabel && onCta && (
+          <Text size="xs" c={color} fw={500} style={{ cursor: 'pointer', whiteSpace: 'nowrap' }} onClick={onCta}>
+            {ctaLabel} →
+          </Text>
+        )}
       </Group>
     </Card>
   )
