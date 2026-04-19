@@ -20,6 +20,7 @@ import { useState } from 'react'
 import {
   TbClipboardList,
   TbCode,
+  TbHeartbeat,
   TbLayoutDashboard,
   TbLayoutSidebarLeftCollapse,
   TbLayoutSidebarLeftExpand,
@@ -37,13 +38,14 @@ import { AuditLogsPanel } from '@/frontend/components/admin/AuditLogsPanel'
 import { OverviewPanel } from '@/frontend/components/admin/OverviewPanel'
 import { ProjectsOverviewPanel } from '@/frontend/components/admin/ProjectsOverviewPanel'
 import { SessionsPanel } from '@/frontend/components/admin/SessionsPanel'
+import { SystemHealthPanel } from '@/frontend/components/admin/SystemHealthPanel'
 import { TaskTriagePanel } from '@/frontend/components/admin/TaskTriagePanel'
 import { UsersPanel } from '@/frontend/components/admin/UsersPanel'
 import { NotificationBell } from '@/frontend/components/NotificationBell'
 import { ThemeToggle } from '@/frontend/components/ThemeToggle'
 import { useLogout, useSession } from '@/frontend/hooks/useAuth'
 
-const validTabs = ['overview', 'users', 'audit-logs', 'projects', 'tasks', 'analytics', 'sessions'] as const
+const validTabs = ['overview', 'users', 'audit-logs', 'projects', 'tasks', 'analytics', 'sessions', 'health'] as const
 type TabKey = (typeof validTabs)[number]
 
 export const Route = createFileRoute('/admin')({
@@ -79,6 +81,7 @@ const navItems: NavItem[] = [
   { label: 'Task Triage', icon: TbListCheck, key: 'tasks' },
   { label: 'Analytics', icon: TbReportAnalytics, key: 'analytics' },
   { label: 'Sessions', icon: TbPlugConnected, key: 'sessions' },
+  { label: 'System Health', icon: TbHeartbeat, key: 'health' },
 ]
 
 function AdminPage() {
@@ -272,6 +275,7 @@ function AdminPage() {
           {active === 'tasks' && <TaskTriagePanel />}
           {active === 'analytics' && <AnalyticsPanel />}
           {active === 'sessions' && <SessionsPanel />}
+          {active === 'health' && <SystemHealthPanel />}
         </Container>
       </AppShell.Main>
     </AppShell>

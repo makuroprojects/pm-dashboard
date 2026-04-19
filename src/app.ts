@@ -9,6 +9,7 @@ import { env } from './lib/env'
 import { normalizeGithubRepo, verifyGithubSignature } from './lib/github'
 import { notifyTaskAssigned, notifyTaskCommented, notifyTaskStatusChanged } from './lib/notifications'
 import { addConnection, broadcastToAdmins, getOnlineUserIds, removeConnection } from './lib/presence'
+import { redis } from './lib/redis'
 import { parseSchema } from './lib/schema-parser'
 import { generateWebhookToken, verifyWebhookToken } from './lib/webhook-tokens'
 
@@ -2154,6 +2155,139 @@ export function createApp() {
             onlineUsers: onlineIds.size,
             byRole,
           },
+        }
+      })
+
+      // ─── System Health ────────────────────────────────
+      .get('/api/admin/health', async ({ request, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        if (!isSystemAdmin(auth.role)) {
+          set.status = 403
+          return { error: 'Forbidden' }
+        }
+
+        const now = Date.now()
+        const since24h = new Date(now - 24 * 60 * 60 * 1000)
+        const LIVE_MS = 5 * 60 * 1000
+
+        const dbStart = Date.now()
+        let dbOk = false
+        let dbLatencyMs: number | null = null
+        let dbError: string | null = null
+        try {
+          await prisma.$queryRawUnsafe('SELECT 1')
+          dbOk = true
+          dbLatencyMs = Date.now() - dbStart
+        } catch (e) {
+          dbError = e instanceof Error ? e.message : 'unknown'
+        }
+
+        const redisStart = Date.now()
+        let redisOk = false
+        let redisLatencyMs: number | null = null
+        let redisError: string | null = null
+        try {
+          await redis.send('PING', [])
+          redisOk = true
+          redisLatencyMs = Date.now() - redisStart
+        } catch (e) {
+          redisError = e instanceof Error ? e.message : 'unknown'
+        }
+
+        const [
+          agents,
+          sessionsTotal,
+          sessionsActive,
+          webhookTotal,
+          webhookOk,
+          webhookFail,
+          webhookAuthFail,
+          webhookEvents,
+          auditLogCount,
+          webhookLogCount,
+          agentsCount,
+          tokensActive,
+        ] = await Promise.all([
+          prisma.agent.findMany({ select: { status: true, lastSeenAt: true } }),
+          prisma.session.count(),
+          prisma.session.count({ where: { expiresAt: { gt: new Date(now) } } }),
+          prisma.webhookRequestLog.count({ where: { createdAt: { gte: since24h } } }),
+          prisma.webhookRequestLog.count({ where: { createdAt: { gte: since24h }, statusCode: { lt: 400 } } }),
+          prisma.webhookRequestLog.count({
+            where: { createdAt: { gte: since24h }, statusCode: { gte: 400 }, reason: { not: 'unauthorized' } },
+          }),
+          prisma.webhookRequestLog.count({ where: { createdAt: { gte: since24h }, reason: 'unauthorized' } }),
+          prisma.webhookRequestLog.aggregate({
+            _sum: { eventsIn: true },
+            where: { createdAt: { gte: since24h } },
+          }),
+          prisma.auditLog.count(),
+          prisma.webhookRequestLog.count(),
+          prisma.agent.count(),
+          prisma.webhookToken.count({ where: { status: 'ACTIVE' } }),
+        ])
+
+        const agentSummary = {
+          total: agentsCount,
+          pending: agents.filter((a) => a.status === 'PENDING').length,
+          approved: agents.filter((a) => a.status === 'APPROVED').length,
+          revoked: agents.filter((a) => a.status === 'REVOKED').length,
+          live: agents.filter((a) => a.status === 'APPROVED' && a.lastSeenAt && now - a.lastSeenAt.getTime() < LIVE_MS)
+            .length,
+        }
+
+        const webhooks = {
+          total24h: webhookTotal,
+          success24h: webhookOk,
+          fail24h: webhookFail,
+          authFail24h: webhookAuthFail,
+          eventsIn24h: webhookEvents._sum.eventsIn ?? 0,
+          successRate: webhookTotal > 0 ? Math.round((webhookOk / webhookTotal) * 1000) / 10 : null,
+          activeTokens: tokensActive,
+        }
+
+        const retention = {
+          auditLogDays: env.AUDIT_LOG_RETENTION_DAYS,
+          auditLogCount,
+          webhookLogDays: env.WEBHOOK_LOG_RETENTION_DAYS,
+          webhookLogCount,
+        }
+
+        const envChecks: { key: string; set: boolean; required: boolean; note?: string }[] = [
+          { key: 'DATABASE_URL', set: !!Bun.env.DATABASE_URL, required: true },
+          { key: 'REDIS_URL', set: !!Bun.env.REDIS_URL, required: true },
+          { key: 'GOOGLE_CLIENT_ID', set: !!Bun.env.GOOGLE_CLIENT_ID, required: true },
+          { key: 'GOOGLE_CLIENT_SECRET', set: !!Bun.env.GOOGLE_CLIENT_SECRET, required: true },
+          {
+            key: 'PMW_WEBHOOK_TOKEN',
+            set: !!Bun.env.PMW_WEBHOOK_TOKEN,
+            required: false,
+            note: tokensActive > 0 ? 'DB tokens active, env fallback unused' : 'env fallback in use',
+          },
+          { key: 'GITHUB_WEBHOOK_SECRET', set: !!Bun.env.GITHUB_WEBHOOK_SECRET, required: false },
+          { key: 'MCP_SECRET', set: !!Bun.env.MCP_SECRET, required: false },
+          { key: 'SUPER_ADMIN_EMAIL', set: !!Bun.env.SUPER_ADMIN_EMAIL, required: false },
+        ]
+
+        return {
+          timestamp: new Date(now).toISOString(),
+          services: {
+            db: { ok: dbOk, latencyMs: dbLatencyMs, error: dbError },
+            redis: { ok: redisOk, latencyMs: redisLatencyMs, error: redisError },
+          },
+          sessions: {
+            total: sessionsTotal,
+            active: sessionsActive,
+            online: getOnlineUserIds().length,
+          },
+          agents: agentSummary,
+          webhooks,
+          retention,
+          env: envChecks,
         }
       })
 
