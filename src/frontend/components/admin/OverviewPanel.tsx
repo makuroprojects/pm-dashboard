@@ -1,13 +1,29 @@
-import { ActionIcon, Badge, Card, Group, SimpleGrid, Stack, Text, ThemeIcon, Title, Tooltip } from '@mantine/core'
+import {
+  ActionIcon,
+  Alert,
+  Badge,
+  Card,
+  Group,
+  Progress,
+  SimpleGrid,
+  Stack,
+  Text,
+  ThemeIcon,
+  Title,
+  Tooltip,
+} from '@mantine/core'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { useMemo } from 'react'
 import {
   TbActivity,
   TbAlertTriangle,
+  TbFlame,
+  TbHeartbeat,
   TbListCheck,
   TbPlugConnected,
   TbRefresh,
+  TbShieldCheck,
   TbTarget,
   type TbUsers,
   TbUsersGroup,
@@ -46,7 +62,97 @@ interface AuditLogEntry {
   user: { name: string; email: string } | null
 }
 
+type RiskSeverity = 'none' | 'low' | 'medium' | 'high'
+
+interface RiskReport {
+  severity: RiskSeverity
+  summary: {
+    overdueTasks: number
+    staleTasks: number
+    pastDueProjects: number
+    pendingAgents: number
+    offlineAgents: number
+    missingEnv: number
+  }
+  overdueTasks: Array<{
+    id: string
+    title: string
+    priority: string
+    daysOverdue: number | null
+    assignee: string | null
+    project: string
+    projectId: string
+  }>
+  staleTasks: Array<{
+    id: string
+    title: string
+    priority: string
+    daysStale: number
+    assignee: string | null
+    project: string
+    projectId: string
+  }>
+  pastDueProjects: Array<{ id: string; name: string; priority: string; owner: string; daysOverdue: number | null }>
+  pendingAgents: Array<{ id: string; agentId: string; hostname: string; osUser: string }>
+  offlineAgents: Array<{ id: string; agentId: string; hostname: string; lastSeenAt: string }>
+  missingEnv: string[]
+}
+
+interface HealthRow {
+  id: string
+  name: string
+  status: string
+  priority: string
+  owner: string
+  endsAt: string | null
+  daysUntilDue: number | null
+  pastDue: boolean
+  openTasks: number
+  overdueTasks: number
+  blockedTasks: number
+  closed7d: number
+  extensions: number
+  score: number
+  grade: 'A' | 'B' | 'C' | 'D' | 'E' | 'F'
+}
+
+interface LoadRow {
+  userId: string | null
+  email: string | null
+  name: string
+  role: string | null
+  open: number
+  estimateHours: number
+  highPriority: number
+  overdue: number
+  closed7d: number
+  overloaded: boolean
+}
+
 const LIVE_THRESHOLD_MS = 5 * 60 * 1000
+
+const SEVERITY_COLOR: Record<RiskSeverity, string> = {
+  none: 'teal',
+  low: 'blue',
+  medium: 'orange',
+  high: 'red',
+}
+
+const GRADE_COLOR: Record<string, string> = {
+  A: 'teal',
+  B: 'green',
+  C: 'yellow',
+  D: 'orange',
+  E: 'red',
+  F: 'red',
+}
+
+const PRIORITY_COLOR: Record<string, string> = {
+  LOW: 'gray',
+  MEDIUM: 'blue',
+  HIGH: 'orange',
+  CRITICAL: 'red',
+}
 
 const ACTION_COLOR: Record<string, string> = {
   LOGIN: 'green',
@@ -113,9 +219,42 @@ export function OverviewPanel() {
     refetchInterval: 30_000,
   })
 
+  const risksQ = useQuery({
+    queryKey: ['admin', 'overview', 'risks'],
+    queryFn: () =>
+      fetch('/api/admin/overview/risks', { credentials: 'include' }).then((r) => r.json()) as Promise<RiskReport>,
+    refetchInterval: 30_000,
+  })
+
+  const healthQ = useQuery({
+    queryKey: ['admin', 'overview', 'health'],
+    queryFn: () =>
+      fetch('/api/admin/overview/health?limit=12', { credentials: 'include' }).then((r) => r.json()) as Promise<{
+        count: number
+        projects: HealthRow[]
+      }>,
+    refetchInterval: 60_000,
+  })
+
+  const loadQ = useQuery({
+    queryKey: ['admin', 'overview', 'load'],
+    queryFn: () =>
+      fetch('/api/admin/overview/load?includeUnassigned=false&limit=12', { credentials: 'include' }).then((r) =>
+        r.json(),
+      ) as Promise<{ count: number; rows: LoadRow[] }>,
+    refetchInterval: 60_000,
+  })
+
   const loading = usersQ.isLoading || projectsQ.isLoading || tasksQ.isLoading || agentsQ.isLoading || auditQ.isLoading
   const fetching =
-    usersQ.isFetching || projectsQ.isFetching || tasksQ.isFetching || agentsQ.isFetching || auditQ.isFetching
+    usersQ.isFetching ||
+    projectsQ.isFetching ||
+    tasksQ.isFetching ||
+    agentsQ.isFetching ||
+    auditQ.isFetching ||
+    risksQ.isFetching ||
+    healthQ.isFetching ||
+    loadQ.isFetching
 
   const stats = useMemo(() => {
     const users = usersQ.data?.users ?? []
@@ -153,6 +292,9 @@ export function OverviewPanel() {
     tasksQ.refetch()
     agentsQ.refetch()
     auditQ.refetch()
+    risksQ.refetch()
+    healthQ.refetch()
+    loadQ.refetch()
   }
 
   const logs = auditQ.data?.logs ?? []
@@ -209,6 +351,14 @@ export function OverviewPanel() {
           color="teal"
         />
       </SimpleGrid>
+
+      {risksQ.data && <RedFlagsSection risks={risksQ.data} navigate={navigate} />}
+
+      {healthQ.data && healthQ.data.projects.length > 0 && (
+        <PortfolioHealthSection rows={healthQ.data.projects} navigate={navigate} />
+      )}
+
+      {loadQ.data && loadQ.data.rows.length > 0 && <TeamLoadSection rows={loadQ.data.rows} />}
 
       <Card withBorder padding="md" radius="md">
         <Stack gap="sm">
@@ -310,6 +460,236 @@ function KpiCard({
           <Icon size={20} />
         </ThemeIcon>
       </Group>
+    </Card>
+  )
+}
+
+function RedFlagsSection({ risks, navigate }: { risks: RiskReport; navigate: ReturnType<typeof useNavigate> }) {
+  const s = risks.summary
+  const nothing =
+    s.overdueTasks + s.staleTasks + s.pastDueProjects + s.pendingAgents + s.offlineAgents + s.missingEnv === 0
+
+  if (nothing) {
+    return (
+      <Alert color="teal" icon={<TbShieldCheck size={18} />} variant="light">
+        <Text size="sm" fw={500}>
+          Semua sistem hijau — tidak ada red flag saat ini.
+        </Text>
+      </Alert>
+    )
+  }
+
+  return (
+    <Card withBorder padding="md" radius="md">
+      <Group gap="xs" justify="space-between" mb="sm">
+        <Group gap="xs">
+          <ThemeIcon variant="light" color={SEVERITY_COLOR[risks.severity]} size="md" radius="md">
+            <TbFlame size={16} />
+          </ThemeIcon>
+          <Title order={5}>Red flags</Title>
+          <Badge color={SEVERITY_COLOR[risks.severity]} variant="light" size="sm">
+            {risks.severity.toUpperCase()}
+          </Badge>
+        </Group>
+      </Group>
+
+      <SimpleGrid cols={{ base: 2, md: 3, lg: 6 }} spacing="xs" mb="md">
+        <RiskStat label="Overdue tasks" value={s.overdueTasks} color={s.overdueTasks > 0 ? 'red' : 'gray'} />
+        <RiskStat label="Stale IN_PROGRESS" value={s.staleTasks} color={s.staleTasks > 0 ? 'orange' : 'gray'} />
+        <RiskStat label="Past-due projects" value={s.pastDueProjects} color={s.pastDueProjects > 0 ? 'red' : 'gray'} />
+        <RiskStat label="Pending agents" value={s.pendingAgents} color={s.pendingAgents > 0 ? 'orange' : 'gray'} />
+        <RiskStat label="Offline agents" value={s.offlineAgents} color={s.offlineAgents > 0 ? 'yellow' : 'gray'} />
+        <RiskStat label="Missing env" value={s.missingEnv} color={s.missingEnv > 0 ? 'red' : 'gray'} />
+      </SimpleGrid>
+
+      {risks.missingEnv.length > 0 && (
+        <Alert color="red" variant="light" mb="xs">
+          <Text size="xs" fw={500}>
+            Missing env: {risks.missingEnv.join(', ')}
+          </Text>
+        </Alert>
+      )}
+
+      {risks.overdueTasks.length > 0 && (
+        <Stack gap={4} mb="sm">
+          <Text size="xs" c="dimmed" fw={500} tt="uppercase">
+            Overdue — top 5
+          </Text>
+          {risks.overdueTasks.slice(0, 5).map((t) => (
+            <Group key={t.id} gap="xs" wrap="nowrap">
+              <Badge size="xs" color={PRIORITY_COLOR[t.priority] ?? 'gray'} variant="outline">
+                {t.priority}
+              </Badge>
+              <Text
+                size="sm"
+                style={{ flex: 1, cursor: 'pointer' }}
+                truncate
+                onClick={() => navigate({ to: '/admin', search: { tab: 'projects' } })}
+              >
+                {t.title}
+              </Text>
+              <Text size="xs" c="red">
+                {t.daysOverdue ?? 0}d overdue
+              </Text>
+              <Text size="xs" c="dimmed" style={{ minWidth: 120, textAlign: 'right' }} truncate>
+                {t.assignee ?? 'unassigned'}
+              </Text>
+            </Group>
+          ))}
+        </Stack>
+      )}
+
+      {risks.pastDueProjects.length > 0 && (
+        <Stack gap={4}>
+          <Text size="xs" c="dimmed" fw={500} tt="uppercase">
+            Past-due projects
+          </Text>
+          {risks.pastDueProjects.slice(0, 3).map((p) => (
+            <Group key={p.id} gap="xs" wrap="nowrap">
+              <Badge size="xs" color={PRIORITY_COLOR[p.priority] ?? 'gray'} variant="outline">
+                {p.priority}
+              </Badge>
+              <Text size="sm" style={{ flex: 1 }} truncate>
+                {p.name}
+              </Text>
+              <Text size="xs" c="red">
+                {p.daysOverdue ?? 0}d past
+              </Text>
+              <Text size="xs" c="dimmed" style={{ minWidth: 120, textAlign: 'right' }} truncate>
+                {p.owner}
+              </Text>
+            </Group>
+          ))}
+        </Stack>
+      )}
+    </Card>
+  )
+}
+
+function RiskStat({ label, value, color }: { label: string; value: number; color: string }) {
+  return (
+    <div>
+      <Text size="xs" c="dimmed" fw={500} tt="uppercase">
+        {label}
+      </Text>
+      <Text fw={700} size="lg" c={value > 0 ? color : undefined}>
+        {value}
+      </Text>
+    </div>
+  )
+}
+
+function PortfolioHealthSection({ rows, navigate }: { rows: HealthRow[]; navigate: ReturnType<typeof useNavigate> }) {
+  return (
+    <Card withBorder padding="md" radius="md">
+      <Group gap="xs" mb="sm">
+        <ThemeIcon variant="light" color="blue" size="md" radius="md">
+          <TbHeartbeat size={16} />
+        </ThemeIcon>
+        <Title order={5}>Portfolio health</Title>
+        <Text size="xs" c="dimmed">
+          sorted by score (worst first)
+        </Text>
+      </Group>
+      <SimpleGrid cols={{ base: 1, sm: 2, md: 3, lg: 4 }} spacing="xs">
+        {rows.map((r) => (
+          <Card
+            key={r.id}
+            withBorder
+            padding="sm"
+            radius="md"
+            style={{ cursor: 'pointer' }}
+            onClick={() => navigate({ to: '/admin', search: { tab: 'projects' } })}
+          >
+            <Group justify="space-between" wrap="nowrap" align="flex-start">
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <Text size="sm" fw={600} truncate>
+                  {r.name}
+                </Text>
+                <Text size="xs" c="dimmed">
+                  {r.status} · {r.openTasks} open · {r.closed7d} closed/7d
+                </Text>
+                {(r.overdueTasks > 0 || r.blockedTasks > 0 || r.pastDue) && (
+                  <Group gap={4} mt={4}>
+                    {r.overdueTasks > 0 && (
+                      <Badge size="xs" color="red" variant="light">
+                        {r.overdueTasks} overdue
+                      </Badge>
+                    )}
+                    {r.blockedTasks > 0 && (
+                      <Badge size="xs" color="orange" variant="light">
+                        {r.blockedTasks} blocked
+                      </Badge>
+                    )}
+                    {r.pastDue && (
+                      <Badge size="xs" color="red" variant="filled">
+                        past-due
+                      </Badge>
+                    )}
+                  </Group>
+                )}
+              </div>
+              <Badge color={GRADE_COLOR[r.grade] ?? 'gray'} variant="filled" size="lg">
+                {r.grade}
+              </Badge>
+            </Group>
+          </Card>
+        ))}
+      </SimpleGrid>
+    </Card>
+  )
+}
+
+function TeamLoadSection({ rows }: { rows: LoadRow[] }) {
+  const maxOpen = Math.max(1, ...rows.map((r) => r.open))
+  return (
+    <Card withBorder padding="md" radius="md">
+      <Group gap="xs" mb="sm">
+        <ThemeIcon variant="light" color="violet" size="md" radius="md">
+          <TbUsersGroup size={16} />
+        </ThemeIcon>
+        <Title order={5}>Team load</Title>
+        <Text size="xs" c="dimmed">
+          sorted by open tasks
+        </Text>
+      </Group>
+      <Stack gap={8}>
+        {rows.map((r) => (
+          <Group key={r.userId ?? 'none'} gap="sm" wrap="nowrap">
+            <div style={{ minWidth: 160, flex: '0 0 160px' }}>
+              <Text size="sm" fw={500} truncate>
+                {r.name}
+              </Text>
+              <Text size="xs" c="dimmed" truncate>
+                {r.role ?? '—'}
+              </Text>
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <Progress
+                value={(r.open / maxOpen) * 100}
+                color={r.overloaded ? 'red' : r.open > maxOpen * 0.6 ? 'orange' : 'teal'}
+                size="md"
+              />
+            </div>
+            <Text size="xs" fw={500} style={{ minWidth: 64, textAlign: 'right' }}>
+              {r.open} open
+            </Text>
+            <Text size="xs" c="dimmed" style={{ minWidth: 70, textAlign: 'right' }}>
+              {r.estimateHours}h est
+            </Text>
+            {r.overdue > 0 && (
+              <Badge size="xs" color="red" variant="light">
+                {r.overdue} overdue
+              </Badge>
+            )}
+            {r.overloaded && (
+              <Badge size="xs" color="red" variant="filled">
+                overloaded
+              </Badge>
+            )}
+          </Group>
+        ))}
+      </Stack>
     </Card>
   )
 }

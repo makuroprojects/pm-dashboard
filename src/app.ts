@@ -3,6 +3,7 @@ import { html } from '@elysiajs/html'
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
 import { Elysia } from 'elysia'
 import { createMcpServer, type McpScope } from '../scripts/mcp/server'
+import { computeAdminOverview, computeProjectHealth, computeRiskReport, computeTeamLoad } from './lib/admin-overview'
 import { appLog, clearAppLogs, getAppLogs } from './lib/applog'
 import { prisma } from './lib/db'
 import { computePhantomWork, computeTaskEffort, detectGhostTasks, effortReport } from './lib/effort'
@@ -2359,6 +2360,68 @@ export function createApp() {
         const limit = Math.min(200, Math.max(1, Number(query.limit) || 50))
         const rows = await computePhantomWork({ days, limit })
         return { count: rows.length, days, rows }
+      })
+
+      // ─── Admin Overview Cockpit ───────────────────────
+      .get('/api/admin/overview/risks', async ({ request, query, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        if (!isSystemAdmin(auth.role)) {
+          set.status = 403
+          return { error: 'Forbidden' }
+        }
+        const staleDays = Math.min(30, Math.max(1, Number(query.staleDays) || 3))
+        const offlineHours = Math.min(720, Math.max(1, Number(query.offlineHours) || 1))
+        return computeRiskReport({ staleDays, offlineHours })
+      })
+
+      .get('/api/admin/overview/health', async ({ request, query, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        if (!isSystemAdmin(auth.role)) {
+          set.status = 403
+          return { error: 'Forbidden' }
+        }
+        const projectId = typeof query.projectId === 'string' ? query.projectId : undefined
+        const includeArchived = query.includeArchived === 'true'
+        const limit = Math.min(200, Math.max(1, Number(query.limit) || 50))
+        return computeProjectHealth({ projectId, includeArchived, limit })
+      })
+
+      .get('/api/admin/overview/load', async ({ request, query, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        if (!isSystemAdmin(auth.role)) {
+          set.status = 403
+          return { error: 'Forbidden' }
+        }
+        const projectId = typeof query.projectId === 'string' ? query.projectId : undefined
+        const includeUnassigned = query.includeUnassigned !== 'false'
+        const limit = Math.min(200, Math.max(1, Number(query.limit) || 50))
+        return computeTeamLoad({ projectId, includeUnassigned, limit })
+      })
+
+      .get('/api/admin/overview/kpis', async ({ request, query, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        if (!isSystemAdmin(auth.role)) {
+          set.status = 403
+          return { error: 'Forbidden' }
+        }
+        const recentAuditLimit = Math.min(50, Math.max(0, Number(query.recentAuditLimit) || 8))
+        return computeAdminOverview({ recentAuditLimit })
       })
 
       // ─── Projects API ─────────────────────────────────

@@ -108,6 +108,23 @@ ActivityWatch agents push events to `/webhooks/aw` → events land in `ActivityE
 
 All three mount as `/dev` sidebar tabs (`Agents`, `Webhook Tokens`, `Webhook Monitor`).
 
+## Admin Overview Cockpit
+
+System-wide "what needs attention right now" dashboard at `/admin?tab=overview`. Answers: is anything on fire? which projects are failing? who's overloaded? Backs both the MCP overview tools and the frontend panel from one lib, so MCP queries and the UI never diverge.
+
+- **Helpers**: `src/lib/admin-overview.ts`
+  - `computeAdminOverview({ recentAuditLimit? })` — aggregated KPIs (users/projects/tasks/agents/webhooks24h/velocity/recentAudit). Mirrors `/admin` top cards.
+  - `computeProjectHealth({ projectId?, includeArchived?, limit? })` — per-project score 0-100 + grade A-F derived from pastDue (-35), overdueTasks (-5 each capped 25), blockedTasks (-3 each capped 15), extensions>2 (-10), extensions>4 (-5), no velocity on ACTIVE project (-10). Sorted worst-first.
+  - `computeTeamLoad({ projectId?, includeUnassigned?, limit? })` — per-user `open`, `estimateHours`, `highPriority`, `overdue`, `closed7d`; `overloaded = open >= 10 || estimateHours > 80 || overdue >= 3`. Sorted by open desc.
+  - `computeRiskReport({ staleDays?, offlineHours? })` — consolidated scan: overdueTasks, staleTasks (IN_PROGRESS not updated in N days), pastDueProjects, pendingAgents, offlineAgents, missingEnv (DATABASE_URL/REDIS_URL/GOOGLE_*). Rolls up severity: `none`/`low`/`medium`/`high`.
+- **API** (ADMIN + SUPER_ADMIN):
+  - `GET /api/admin/overview/kpis?recentAuditLimit=N`
+  - `GET /api/admin/overview/health?projectId&includeArchived&limit`
+  - `GET /api/admin/overview/load?projectId&includeUnassigned&limit`
+  - `GET /api/admin/overview/risks?staleDays&offlineHours`
+- **Frontend**: `OverviewPanel.tsx` — KPI cards (existing) + Red flags (severity badge + 6 risk stats + overdue top-5 + past-due projects list) + Portfolio health grid (card per project with A-F badge, clickable) + Team load bars (Progress per user colored by overloaded-threshold). Red flags refresh 30s; health + load refresh 60s.
+- **MCP tools** (readonly, in `overview.ts` module): `admin_overview`, `project_health`, `team_load`, `risk_report` — now call the same lib functions as the HTTP endpoints.
+
 ## Effort Tracking
 
 Evidence-based effort attribution: correlates pm-watch `ActivityEvent` rows (ActivityWatch window-bucket events) with `Task.startsAt` / `closedAt` windows to compute "actualHours" per task. An event belongs to an `Agent`; `Agent.claimedById` identifies the user; a task's actual hours is the sum of window-bucket event durations from that user's agents that fall inside the task's active period.
