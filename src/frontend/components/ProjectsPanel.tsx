@@ -81,8 +81,8 @@ export interface ProjectListItem {
   updatedAt: string
   owner: ProjectUser
   _count: { members: number; tasks: number; milestones: number }
-  myRole: MemberRole
-  joinedAt: string
+  myRole: MemberRole | null
+  joinedAt: string | null
   taskStats?: TaskStats
   milestoneStats?: { done: number; total: number }
 }
@@ -612,6 +612,7 @@ export function ProjectsPanel() {
               key={p.id}
               project={p}
               density={density}
+              isSystemAdmin={canCreateProject}
               onOpen={() => openProject(p.id)}
               onEdit={() => openProject(p.id, 'settings')}
             />
@@ -678,11 +679,13 @@ function PortfolioStat({
 function ProjectCard({
   project: p,
   density,
+  isSystemAdmin: isAdmin,
   onOpen,
   onEdit,
 }: {
   project: ProjectListItem
   density: 'comfortable' | 'compact'
+  isSystemAdmin: boolean
   onOpen?: () => void
   onEdit: () => void
 }) {
@@ -690,7 +693,7 @@ function ProjectCard({
   const timeProgress = computeTimeProgress(p)
   const health = computeHealth(p)
   const extended = p.originalEndAt && p.endsAt && new Date(p.endsAt).getTime() !== new Date(p.originalEndAt).getTime()
-  const canEdit = p.myRole === 'OWNER' || p.myRole === 'PM'
+  const canEdit = isAdmin || p.myRole === 'OWNER' || p.myRole === 'PM'
   const compact = density === 'compact'
   const [hover, setHover] = useState(false)
 
@@ -742,9 +745,15 @@ function ProjectCard({
           <Badge color={PRIORITY_COLOR[p.priority]} variant="dot" size="xs">
             {p.priority}
           </Badge>
-          <Badge color={ROLE_COLOR[p.myRole]} variant="light" size="xs">
-            {p.myRole}
-          </Badge>
+          {p.myRole ? (
+            <Badge color={ROLE_COLOR[p.myRole]} variant="light" size="xs">
+              {p.myRole}
+            </Badge>
+          ) : isAdmin ? (
+            <Badge color="gray" variant="outline" size="xs">
+              ADMIN VIEW
+            </Badge>
+          ) : null}
           {overdue && (
             <Badge color="red" variant="filled" size="xs" leftSection={<TbAlertTriangle size={10} />}>
               Overdue {daysOver}d
@@ -1029,7 +1038,7 @@ export function MembersSection({
   ownerId,
 }: {
   projectId: string
-  myRole: MemberRole
+  myRole: MemberRole | null
   systemRole?: string | null
   ownerId: string
 }) {

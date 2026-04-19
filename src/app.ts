@@ -2178,19 +2178,29 @@ export function createApp() {
           set.status = 401
           return { error: 'Unauthorized' }
         }
+        const isAdmin = isSystemAdmin(auth.role)
+        const projectInclude = {
+          owner: { select: { id: true, name: true, email: true } },
+          _count: { select: { members: true, tasks: true, milestones: true } },
+        }
         const memberships = await prisma.projectMember.findMany({
           where: { userId: auth.userId },
-          include: {
-            project: {
-              include: {
-                owner: { select: { id: true, name: true, email: true } },
-                _count: { select: { members: true, tasks: true, milestones: true } },
-              },
-            },
-          },
+          include: { project: { include: projectInclude } },
           orderBy: { joinedAt: 'desc' },
         })
-        const projectIds = memberships.map((m) => m.projectId)
+        const roleByProject = new Map<string, 'OWNER' | 'PM' | 'MEMBER' | 'VIEWER'>()
+        const joinedAtByProject = new Map<string, Date>()
+        for (const m of memberships) {
+          roleByProject.set(m.projectId, m.role)
+          joinedAtByProject.set(m.projectId, m.joinedAt)
+        }
+        const projectRows = isAdmin
+          ? await prisma.project.findMany({
+              include: projectInclude,
+              orderBy: { createdAt: 'desc' },
+            })
+          : memberships.map((m) => m.project)
+        const projectIds = projectRows.map((p) => p.id)
         const grouped = projectIds.length
           ? await prisma.task.groupBy({
               by: ['projectId', 'status'],
@@ -2213,12 +2223,12 @@ export function createApp() {
           : []
         const doneByProject = new Map<string, number>(milestonesDone.map((m) => [m.projectId, m._count._all]))
         return {
-          projects: memberships.map((m) => {
-            const s = statsByProject.get(m.projectId) ?? {}
+          projects: projectRows.map((p) => {
+            const s = statsByProject.get(p.id) ?? {}
             return {
-              ...m.project,
-              myRole: m.role,
-              joinedAt: m.joinedAt,
+              ...p,
+              myRole: roleByProject.get(p.id) ?? null,
+              joinedAt: joinedAtByProject.get(p.id) ?? null,
               taskStats: {
                 open: s.OPEN ?? 0,
                 inProgress: s.IN_PROGRESS ?? 0,
@@ -2229,8 +2239,8 @@ export function createApp() {
                   (s.OPEN ?? 0) + (s.IN_PROGRESS ?? 0) + (s.READY_FOR_QC ?? 0) + (s.REOPENED ?? 0) + (s.CLOSED ?? 0),
               },
               milestoneStats: {
-                done: doneByProject.get(m.projectId) ?? 0,
-                total: m.project._count.milestones,
+                done: doneByProject.get(p.id) ?? 0,
+                total: p._count.milestones,
               },
             }
           }),
@@ -2855,12 +2865,13 @@ export function createApp() {
           set.status = 401
           return { error: 'Unauthorized' }
         }
+        const isAdmin = isSystemAdmin(auth.role)
         const myProjectIds = (
           await prisma.projectMember.findMany({ where: { userId: auth.userId }, select: { projectId: true } })
         ).map((m) => m.projectId)
-        const where: Record<string, unknown> = { projectId: { in: myProjectIds } }
+        const where: Record<string, unknown> = isAdmin ? {} : { projectId: { in: myProjectIds } }
         if (query.projectId) {
-          if (!myProjectIds.includes(String(query.projectId))) {
+          if (!isAdmin && !myProjectIds.includes(String(query.projectId))) {
             set.status = 403
             return { error: 'Not a member of that project' }
           }
@@ -2940,9 +2951,16 @@ export function createApp() {
           return { error: 'Title must be 500 characters or fewer' }
         }
         const membership = await requireProjectMember(body.projectId, auth.userId)
-        if (!membership || membership.role === 'VIEWER') {
+        if (!isSystemAdmin(auth.role) && (!membership || membership.role === 'VIEWER')) {
           set.status = 403
           return { error: 'Not a writable project member' }
+        }
+        if (!membership) {
+          const exists = await prisma.project.findUnique({ where: { id: body.projectId }, select: { id: true } })
+          if (!exists) {
+            set.status = 404
+            return { error: 'Project not found' }
+          }
         }
         if (body.tagIds?.length) {
           const validTags = await prisma.tag.findMany({

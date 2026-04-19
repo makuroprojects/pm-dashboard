@@ -204,7 +204,7 @@ export function ProjectDetailView({
         <Alert color="yellow">Project not found.</Alert>
       ) : (
         <>
-          <ProjectHeader project={project} />
+          <ProjectHeader project={project} systemRole={systemRole} />
 
           <Tabs value={tab} onChange={(v) => v && onTabChange(v as ProjectDetailTab)} keepMounted={false}>
             <Tabs.List>
@@ -271,7 +271,7 @@ export function ProjectDetailView({
   )
 }
 
-function ProjectHeader({ project }: { project: ProjectDetail }) {
+function ProjectHeader({ project, systemRole }: { project: ProjectDetail; systemRole: string | null }) {
   const { overdue, daysOver } = computeOverdue(project)
   const extended =
     project.originalEndAt &&
@@ -295,9 +295,15 @@ function ProjectHeader({ project }: { project: ProjectDetail }) {
             <Badge color={PRIORITY_COLOR[project.priority]} variant="dot" size="sm">
               {project.priority}
             </Badge>
-            <Badge color={ROLE_COLOR[project.myRole] ?? 'gray'} variant="light" size="sm">
-              {project.myRole}
-            </Badge>
+            {project.myRole ? (
+              <Badge color={ROLE_COLOR[project.myRole] ?? 'gray'} variant="light" size="sm">
+                {project.myRole}
+              </Badge>
+            ) : isSystemAdmin(systemRole) ? (
+              <Badge color="gray" variant="outline" size="sm">
+                ADMIN VIEW
+              </Badge>
+            ) : null}
             {overdue && (
               <Badge color="red" variant="filled" size="sm" leftSection={<TbAlertTriangle size={10} />}>
                 Overdue {daysOver}d

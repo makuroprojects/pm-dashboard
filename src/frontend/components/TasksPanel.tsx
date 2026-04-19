@@ -3,6 +3,7 @@ import {
   Badge,
   Button,
   Card,
+  Divider,
   Group,
   Modal,
   MultiSelect,
@@ -26,6 +27,7 @@ import { useNavigate } from '@tanstack/react-router'
 import type { EChartsOption } from 'echarts'
 import { useMemo, useState } from 'react'
 import {
+  TbAlertTriangle,
   TbArrowLeft,
   TbChartBar,
   TbChevronRight,
@@ -34,9 +36,12 @@ import {
   TbListCheck,
   TbPlus,
   TbRefresh,
+  TbSearch,
   TbTag,
+  TbUserQuestion,
   TbX,
 } from 'react-icons/tb'
+import { useSession } from '../hooks/useAuth'
 import { EChart } from './charts/EChart'
 
 type TaskStatus = 'OPEN' | 'IN_PROGRESS' | 'READY_FOR_QC' | 'REOPENED' | 'CLOSED'
@@ -89,7 +94,7 @@ interface TagListItem {
 interface ProjectOption {
   id: string
   name: string
-  myRole: 'OWNER' | 'PM' | 'MEMBER' | 'VIEWER'
+  myRole: 'OWNER' | 'PM' | 'MEMBER' | 'VIEWER' | null
 }
 
 const STATUS_COLOR: Record<TaskStatus, string> = {
@@ -133,6 +138,9 @@ export function TasksPanel({
 }) {
   const qc = useQueryClient()
   const navigate = useNavigate()
+  const session = useSession()
+  const systemRole = session.data?.user?.role ?? null
+  const isAdmin = systemRole === 'ADMIN' || systemRole === 'SUPER_ADMIN'
   const openTask = (id: string) => {
     navigate({
       to: '/pm',
@@ -146,6 +154,8 @@ export function TasksPanel({
   const [showCharts, setShowCharts] = useState(true)
   const [tagFilter, setTagFilter] = useState<string | null>(null)
   const [view, setView] = useState<'table' | 'gantt' | 'kanban'>('table')
+  const [search, setSearch] = useState('')
+  const [quickFilter, setQuickFilter] = useState<'overdue' | 'unassigned' | 'openOnly' | null>(null)
 
   const projectsQ = useQuery({
     queryKey: ['projects'],
@@ -203,8 +213,26 @@ export function TasksPanel({
   })
 
   const projects = projectsQ.data?.projects ?? []
-  const writableProjects = projects.filter((p) => p.myRole !== 'VIEWER')
-  const tasks = tasksQ.data?.tasks ?? []
+  const writableProjects = projects.filter((p) => isAdmin || (p.myRole !== null && p.myRole !== 'VIEWER'))
+  const rawTasks = tasksQ.data?.tasks ?? []
+  const tasks = useMemo(() => {
+    const now = Date.now()
+    const q = search.trim().toLowerCase()
+    return rawTasks.filter((t) => {
+      if (quickFilter === 'overdue') {
+        if (t.status === 'CLOSED' || !t.dueAt || new Date(t.dueAt).getTime() >= now) return false
+      } else if (quickFilter === 'unassigned') {
+        if (t.assignee) return false
+      } else if (quickFilter === 'openOnly') {
+        if (t.status === 'CLOSED') return false
+      }
+      if (q) {
+        const hay = `${t.title} ${t.description}`.toLowerCase()
+        if (!hay.includes(q)) return false
+      }
+      return true
+    })
+  }, [rawTasks, search, quickFilter])
   const activeProject = activeProjectId ? (projects.find((p) => p.id === activeProjectId) ?? null) : null
 
   return (
@@ -269,82 +297,149 @@ export function TasksPanel({
       {showCharts && tasks.length > 0 ? <TaskDashboardOverlay tasks={tasks} /> : null}
 
       <Card withBorder padding="sm" radius="md">
-        <Group gap="sm" wrap="wrap">
-          <TbFilter size={14} />
-          {activeProject ? (
-            <Badge
-              color="blue"
-              variant="light"
-              size="lg"
-              leftSection={<TbTag size={12} />}
-              rightSection={
-                <ActionIcon
-                  size="xs"
-                  variant="transparent"
-                  color="blue"
-                  onClick={() => changeProject(null)}
-                  aria-label="Clear project filter"
-                >
-                  <TbX size={12} />
-                </ActionIcon>
-              }
-            >
-              {activeProject.name}
-            </Badge>
-          ) : (
+        <Stack gap="sm">
+          <Group gap="sm" wrap="wrap">
+            <TbFilter size={14} />
+            {activeProject ? (
+              <Badge
+                color="blue"
+                variant="light"
+                size="lg"
+                leftSection={<TbTag size={12} />}
+                rightSection={
+                  <ActionIcon
+                    size="xs"
+                    variant="transparent"
+                    color="blue"
+                    onClick={() => changeProject(null)}
+                    aria-label="Clear project filter"
+                  >
+                    <TbX size={12} />
+                  </ActionIcon>
+                }
+              >
+                {activeProject.name}
+              </Badge>
+            ) : (
+              <Select
+                placeholder="All projects"
+                data={projects.map((p) => ({ value: p.id, label: p.name }))}
+                value={activeProjectId}
+                onChange={changeProject}
+                clearable
+                size="xs"
+                w={220}
+              />
+            )}
             <Select
-              placeholder="All projects"
-              data={projects.map((p) => ({ value: p.id, label: p.name }))}
-              value={activeProjectId}
-              onChange={changeProject}
+              placeholder="All kinds"
+              data={['TASK', 'BUG', 'QC']}
+              value={kind}
+              onChange={setKind}
               clearable
               size="xs"
-              w={220}
+              w={140}
             />
-          )}
-          <Select
-            placeholder="All kinds"
-            data={['TASK', 'BUG', 'QC']}
-            value={kind}
-            onChange={setKind}
-            clearable
-            size="xs"
-            w={140}
-          />
-          <Select
-            placeholder="All statuses"
-            data={['OPEN', 'IN_PROGRESS', 'READY_FOR_QC', 'REOPENED', 'CLOSED']}
-            value={status}
-            onChange={setStatus}
-            clearable
-            size="xs"
-            w={160}
-          />
-          {activeProjectId && tagsQ.data?.tags.length ? (
             <Select
-              placeholder="All tags"
-              leftSection={<TbTag size={12} />}
-              data={tagsQ.data.tags.map((t) => ({ value: t.id, label: t.name }))}
-              value={tagFilter}
-              onChange={setTagFilter}
+              placeholder="All statuses"
+              data={['OPEN', 'IN_PROGRESS', 'READY_FOR_QC', 'REOPENED', 'CLOSED']}
+              value={status}
+              onChange={setStatus}
               clearable
               size="xs"
               w={160}
             />
-          ) : null}
-          <Switch label="Assigned to me" checked={mine} onChange={(e) => setMine(e.currentTarget.checked)} size="sm" />
-          <SegmentedControl
-            size="xs"
-            value={view}
-            onChange={(v) => setView(v as 'table' | 'gantt' | 'kanban')}
-            data={[
-              { value: 'table', label: 'Table' },
-              { value: 'kanban', label: 'Kanban' },
-              { value: 'gantt', label: 'Gantt' },
-            ]}
-            ml="auto"
-          />
-        </Group>
+            {activeProjectId && tagsQ.data?.tags.length ? (
+              <Select
+                placeholder="All tags"
+                leftSection={<TbTag size={12} />}
+                data={tagsQ.data.tags.map((t) => ({ value: t.id, label: t.name }))}
+                value={tagFilter}
+                onChange={setTagFilter}
+                clearable
+                size="xs"
+                w={160}
+              />
+            ) : null}
+            <TextInput
+              placeholder="Search title or description"
+              leftSection={<TbSearch size={12} />}
+              value={search}
+              onChange={(e) => setSearch(e.currentTarget.value)}
+              size="xs"
+              w={240}
+            />
+            <Switch
+              label="Assigned to me"
+              checked={mine}
+              onChange={(e) => setMine(e.currentTarget.checked)}
+              size="sm"
+            />
+            <SegmentedControl
+              size="xs"
+              value={view}
+              onChange={(v) => setView(v as 'table' | 'gantt' | 'kanban')}
+              data={[
+                { value: 'table', label: 'Table' },
+                { value: 'kanban', label: 'Kanban' },
+                { value: 'gantt', label: 'Gantt' },
+              ]}
+              ml="auto"
+            />
+          </Group>
+          <Group gap="xs" wrap="wrap">
+            <Text size="xs" c="dimmed" fw={500}>
+              Quick
+            </Text>
+            <Badge
+              color={quickFilter === 'openOnly' ? 'blue' : 'gray'}
+              variant={quickFilter === 'openOnly' ? 'filled' : 'light'}
+              size="sm"
+              style={{ cursor: 'pointer' }}
+              onClick={() => setQuickFilter(quickFilter === 'openOnly' ? null : 'openOnly')}
+            >
+              Open only
+            </Badge>
+            <Divider orientation="vertical" />
+            <Text size="xs" c="dimmed" fw={500}>
+              Attention
+            </Text>
+            <Badge
+              color={quickFilter === 'overdue' ? 'red' : 'gray'}
+              variant={quickFilter === 'overdue' ? 'filled' : 'light'}
+              size="sm"
+              leftSection={<TbAlertTriangle size={10} />}
+              style={{ cursor: 'pointer' }}
+              onClick={() => setQuickFilter(quickFilter === 'overdue' ? null : 'overdue')}
+            >
+              Overdue
+            </Badge>
+            <Badge
+              color={quickFilter === 'unassigned' ? 'orange' : 'gray'}
+              variant={quickFilter === 'unassigned' ? 'filled' : 'light'}
+              size="sm"
+              leftSection={<TbUserQuestion size={10} />}
+              style={{ cursor: 'pointer' }}
+              onClick={() => setQuickFilter(quickFilter === 'unassigned' ? null : 'unassigned')}
+            >
+              Unassigned
+            </Badge>
+            {(quickFilter || search) && (
+              <Button
+                variant="subtle"
+                color="gray"
+                size="compact-xs"
+                ml="auto"
+                onClick={() => {
+                  setQuickFilter(null)
+                  setSearch('')
+                }}
+              >
+                Clear
+              </Button>
+            )}
+          </Group>
+        </Stack>
       </Card>
 
       {tasks.length === 0 && !tasksQ.isLoading ? (
@@ -401,6 +496,7 @@ export function TasksPanel({
                 <Table.Th>Status</Table.Th>
                 <Table.Th>Priority</Table.Th>
                 <Table.Th>Assignee</Table.Th>
+                <Table.Th>Due</Table.Th>
                 <Table.Th>Hours</Table.Th>
                 <Table.Th>Progress</Table.Th>
                 <Table.Th>Updated</Table.Th>
@@ -467,6 +563,23 @@ export function TasksPanel({
                     </Table.Td>
                     <Table.Td>
                       <Text size="xs">{t.assignee?.name ?? '—'}</Text>
+                    </Table.Td>
+                    <Table.Td>
+                      {t.dueAt ? (
+                        (() => {
+                          const dueMs = new Date(t.dueAt).getTime()
+                          const overdue = t.status !== 'CLOSED' && dueMs < Date.now()
+                          return (
+                            <Text size="xs" c={overdue ? 'red' : 'dimmed'} fw={overdue ? 600 : undefined}>
+                              {new Date(t.dueAt).toLocaleDateString()}
+                            </Text>
+                          )
+                        })()
+                      ) : (
+                        <Text size="xs" c="dimmed">
+                          —
+                        </Text>
+                      )}
                     </Table.Td>
                     <Table.Td>
                       <Tooltip
@@ -1187,8 +1300,8 @@ function TasksGanttView({ tasks, onSelect }: { tasks: TaskListItem[]; onSelect: 
         },
       ],
       dataZoom: [
-        { type: 'slider', xAxisIndex: 0, height: 18, bottom: 8 },
-        { type: 'inside', xAxisIndex: 0 },
+        { type: 'slider', xAxisIndex: 0, height: 18, bottom: 8, filterMode: 'weakFilter' },
+        { type: 'inside', xAxisIndex: 0, filterMode: 'weakFilter' },
       ],
     } as unknown as EChartsOption
   }, [withDates])
