@@ -31,6 +31,8 @@ import {
   TbShieldOff,
   TbTrash,
 } from 'react-icons/tb'
+import { EmptyRow } from '@/frontend/components/shared/EmptyState'
+import { notifyError, notifySuccess } from '@/frontend/lib/notify'
 
 type TokenStatus = 'ACTIVE' | 'DISABLED' | 'REVOKED'
 
@@ -109,7 +111,9 @@ export function WebhookTokensPanel() {
     onSuccess: (res) => {
       queryClient.invalidateQueries({ queryKey: ['admin', 'webhook-tokens'] })
       openShowOnceModal(res.raw, res.token.name)
+      notifySuccess({ message: `Token "${res.token.name}" dibuat. Salin sekarang — hanya ditampilkan sekali.` })
     },
+    onError: (err) => notifyError(err),
   })
 
   const patchToken = useMutation({
@@ -119,12 +123,27 @@ export function WebhookTokensPanel() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status }),
       }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'webhook-tokens'] }),
+    onSuccess: (_data, vars) => {
+      queryClient.invalidateQueries({ queryKey: ['admin', 'webhook-tokens'] })
+      notifySuccess({
+        message:
+          vars.status === 'ACTIVE'
+            ? 'Token diaktifkan.'
+            : vars.status === 'DISABLED'
+              ? 'Token dinonaktifkan.'
+              : 'Token di-revoke permanen.',
+      })
+    },
+    onError: (err) => notifyError(err),
   })
 
   const deleteToken = useMutation({
     mutationFn: (id: string) => api(`/api/admin/webhook-tokens/${id}`, { method: 'DELETE' }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'webhook-tokens'] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin', 'webhook-tokens'] })
+      notifySuccess({ message: 'Token dihapus.' })
+    },
+    onError: (err) => notifyError(err),
   })
 
   const tokens = data?.tokens ?? []
@@ -275,18 +294,18 @@ export function WebhookTokensPanel() {
             {isLoading && (
               <Table.Tr>
                 <Table.Td colSpan={7}>
-                  <Text ta="center" c="dimmed" py="md">
-                    Loading…
-                  </Text>
+                  <EmptyRow title="Memuat token…" />
                 </Table.Td>
               </Table.Tr>
             )}
             {!isLoading && tokens.length === 0 && (
               <Table.Tr>
                 <Table.Td colSpan={7}>
-                  <Text ta="center" c="dimmed" py="md">
-                    Belum ada token. Klik <Code>New token</Code> untuk generate.
-                  </Text>
+                  <EmptyRow
+                    icon={TbKey}
+                    title="Belum ada token"
+                    message="Klik tombol New token di atas untuk generate webhook token pertama."
+                  />
                 </Table.Td>
               </Table.Tr>
             )}

@@ -5,6 +5,7 @@ import {
   Card,
   Container,
   Group,
+  Pagination,
   SegmentedControl,
   SimpleGrid,
   Stack,
@@ -17,6 +18,8 @@ import {
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { TbAlertTriangle, TbChartBar, TbClock, TbRefresh, TbUserExclamation } from 'react-icons/tb'
+
+const PAGE_SIZE = 25
 
 type View = 'variance' | 'ghost' | 'phantom'
 
@@ -107,6 +110,7 @@ export function EffortPanel() {
 }
 
 function VarianceView() {
+  const [page, setPage] = useState(1)
   const { data, isLoading, isFetching, refetch } = useQuery({
     queryKey: ['admin', 'effort', 'variance'],
     queryFn: () =>
@@ -123,6 +127,9 @@ function VarianceView() {
     noEstimate: rows.filter((r) => r.verdict === 'missing-estimate').length,
     noActivity: rows.filter((r) => r.verdict === 'no-activity').length,
   }
+  const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE))
+  const safePage = Math.min(page, totalPages)
+  const pagedRows = rows.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
 
   return (
     <Stack gap="md">
@@ -174,7 +181,7 @@ function VarianceView() {
                 </Table.Td>
               </Table.Tr>
             ) : (
-              rows.map((r) => (
+              pagedRows.map((r) => (
                 <Table.Tr key={r.taskId}>
                   <Table.Td>
                     <Text size="sm" fw={500} lineClamp={1}>
@@ -234,12 +241,21 @@ function VarianceView() {
             )}
           </Table.Tbody>
         </Table>
+        {rows.length > PAGE_SIZE && (
+          <Group justify="space-between" p="md">
+            <Text size="xs" c="dimmed">
+              {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, rows.length)} dari {rows.length}
+            </Text>
+            <Pagination value={safePage} onChange={setPage} total={totalPages} size="sm" />
+          </Group>
+        )}
       </Card>
     </Stack>
   )
 }
 
 function GhostView() {
+  const [page, setPage] = useState(1)
   const { data, isLoading, isFetching, refetch } = useQuery({
     queryKey: ['admin', 'effort', 'ghost'],
     queryFn: () =>
@@ -251,6 +267,9 @@ function GhostView() {
   const rows = data?.rows ?? []
   const abandoned = rows.filter((r) => !r.assigneeOnlineLast24h).length
   const stalled = rows.filter((r) => r.assigneeOnlineLast24h).length
+  const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE))
+  const safePage = Math.min(page, totalPages)
+  const pagedRows = rows.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
 
   return (
     <Stack gap="md">
@@ -302,7 +321,7 @@ function GhostView() {
                 </Table.Td>
               </Table.Tr>
             ) : (
-              rows.map((r) => (
+              pagedRows.map((r) => (
                 <Table.Tr key={r.taskId}>
                   <Table.Td>
                     <Text size="sm" fw={500} lineClamp={1}>
@@ -346,12 +365,21 @@ function GhostView() {
             )}
           </Table.Tbody>
         </Table>
+        {rows.length > PAGE_SIZE && (
+          <Group justify="space-between" p="md">
+            <Text size="xs" c="dimmed">
+              {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, rows.length)} dari {rows.length}
+            </Text>
+            <Pagination value={safePage} onChange={setPage} total={totalPages} size="sm" />
+          </Group>
+        )}
       </Card>
     </Stack>
   )
 }
 
 function PhantomView() {
+  const [page, setPage] = useState(1)
   const { data, isLoading, isFetching, refetch } = useQuery({
     queryKey: ['admin', 'effort', 'phantom'],
     queryFn: () =>
@@ -362,6 +390,9 @@ function PhantomView() {
   })
   const rows = data?.rows ?? []
   const highPhantom = rows.filter((r) => (r.phantomPercent ?? 0) > 50).length
+  const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE))
+  const safePage = Math.min(page, totalPages)
+  const pagedRows = rows.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
 
   return (
     <Stack gap="md">
@@ -413,7 +444,7 @@ function PhantomView() {
                 </Table.Td>
               </Table.Tr>
             ) : (
-              rows.map((r) => (
+              pagedRows.map((r) => (
                 <Table.Tr key={r.userId}>
                   <Table.Td>
                     <Text size="xs">{r.email}</Text>
@@ -460,6 +491,14 @@ function PhantomView() {
             )}
           </Table.Tbody>
         </Table>
+        {rows.length > PAGE_SIZE && (
+          <Group justify="space-between" p="md">
+            <Text size="xs" c="dimmed">
+              {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, rows.length)} dari {rows.length}
+            </Text>
+            <Pagination value={safePage} onChange={setPage} total={totalPages} size="sm" />
+          </Group>
+        )}
       </Card>
     </Stack>
   )

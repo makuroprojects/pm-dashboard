@@ -3,7 +3,6 @@ import {
   Alert,
   Anchor,
   Badge,
-  Breadcrumbs,
   Button,
   Card,
   Code,
@@ -44,6 +43,7 @@ import {
   TbUsers,
 } from 'react-icons/tb'
 import { useSession } from '../hooks/useAuth'
+import { notifyError, notifySuccess } from '../lib/notify'
 import {
   ExtensionsSection,
   MembersSection,
@@ -54,6 +54,7 @@ import {
   type ProjectStatus,
 } from './ProjectsPanel'
 import { RetroTab } from './RetroTab'
+import { Breadcrumbs } from './shared/Breadcrumbs'
 import { TasksPanel } from './TasksPanel'
 
 export const PROJECT_DETAIL_TABS = [
@@ -179,14 +180,9 @@ export function ProjectDetailView({
               <TbArrowLeft size={18} />
             </ActionIcon>
           </Tooltip>
-          <Breadcrumbs separator="·" style={{ minWidth: 0 }}>
-            <Text size="sm" c="dimmed" onClick={onBack} style={{ cursor: 'pointer' }}>
-              Projects
-            </Text>
-            <Text size="sm" fw={500} truncate>
-              {project?.name ?? projectId.slice(0, 8)}
-            </Text>
-          </Breadcrumbs>
+          <Breadcrumbs
+            items={[{ label: 'Projects', onClick: onBack }, { label: project?.name ?? projectId.slice(0, 8) }]}
+          />
         </Group>
         <Group gap="xs">
           <Tooltip label="Refresh">
@@ -775,12 +771,18 @@ function SettingsTab({
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['project', project.id] })
       qc.invalidateQueries({ queryKey: ['projects'] })
+      notifySuccess({ message: 'Project disimpan.' })
     },
+    onError: (err) => notifyError(err),
   })
 
   const remove = useMutation({
     mutationFn: () => api<{ ok: true }>(`/api/projects/${project.id}`, { method: 'DELETE' }),
-    onSuccess: onDeleted,
+    onSuccess: () => {
+      notifySuccess({ message: 'Project dihapus.' })
+      onDeleted()
+    },
+    onError: (err) => notifyError(err),
   })
 
   const invalidRange = startsAt && endsAt && endsAt < startsAt

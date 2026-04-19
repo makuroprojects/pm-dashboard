@@ -8,6 +8,7 @@ import {
   Modal,
   MultiSelect,
   NumberInput,
+  Pagination,
   Progress,
   SegmentedControl,
   Select,
@@ -25,7 +26,7 @@ import { DateInput } from '@mantine/dates'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import type { EChartsOption } from 'echarts'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   TbAlertTriangle,
   TbArrowLeft,
@@ -42,6 +43,7 @@ import {
   TbX,
 } from 'react-icons/tb'
 import { useSession } from '../hooks/useAuth'
+import { notifyError, notifySuccess } from '../lib/notify'
 import { EChart } from './charts/EChart'
 
 type TaskStatus = 'OPEN' | 'IN_PROGRESS' | 'READY_FOR_QC' | 'REOPENED' | 'CLOSED'
@@ -156,6 +158,8 @@ export function TasksPanel({
   const [view, setView] = useState<'table' | 'gantt' | 'kanban'>('table')
   const [search, setSearch] = useState('')
   const [quickFilter, setQuickFilter] = useState<'overdue' | 'unassigned' | 'openOnly' | null>(null)
+  const [page, setPage] = useState(1)
+  const PAGE_SIZE = 25
 
   const projectsQ = useQuery({
     queryKey: ['projects'],
@@ -206,10 +210,12 @@ export function TasksPanel({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       }),
-    onSuccess: () => {
+    onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ['tasks'] })
       setCreateOpen(false)
+      notifySuccess({ message: `Task "${res.task.title}" dibuat.` })
     },
+    onError: (err) => notifyError(err),
   })
 
   const projects = projectsQ.data?.projects ?? []
@@ -234,6 +240,13 @@ export function TasksPanel({
     })
   }, [rawTasks, search, quickFilter])
   const activeProject = activeProjectId ? (projects.find((p) => p.id === activeProjectId) ?? null) : null
+  const totalPages = Math.max(1, Math.ceil(tasks.length / PAGE_SIZE))
+  const safePage = Math.min(page, totalPages)
+  const pagedTasks = tasks.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset page when filters change
+  useEffect(() => {
+    setPage(1)
+  }, [activeProjectId, status, kind, mine, tagFilter, search, quickFilter])
 
   return (
     <Stack gap="md">
@@ -503,7 +516,7 @@ export function TasksPanel({
               </Table.Tr>
             </Table.Thead>
             <Table.Tbody>
-              {tasks.map((t) => {
+              {pagedTasks.map((t) => {
                 const variance =
                   t.estimateHours != null && t.actualHours != null ? t.actualHours - t.estimateHours : null
                 const blocked = t._count.blockedBy > 0 && t.status !== 'CLOSED'
@@ -629,6 +642,14 @@ export function TasksPanel({
               })}
             </Table.Tbody>
           </Table>
+          {tasks.length > PAGE_SIZE && (
+            <Group justify="space-between" p="md">
+              <Text size="xs" c="dimmed">
+                {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, tasks.length)} dari {tasks.length}
+              </Text>
+              <Pagination value={safePage} onChange={setPage} total={totalPages} size="sm" />
+            </Group>
+          )}
         </Card>
       )}
 

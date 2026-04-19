@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { TbBug, TbCircleFilled, TbDots, TbLock, TbLockOpen, TbShieldCheck, TbShieldOff } from 'react-icons/tb'
 import { type Role, useSession } from '@/frontend/hooks/useAuth'
 import { usePresence } from '@/frontend/hooks/usePresence'
+import { notifyError, notifySuccess } from '@/frontend/lib/notify'
 
 interface AdminUser {
   id: string
@@ -34,25 +35,41 @@ export function UsersPanel() {
   const { onlineUserIds } = usePresence()
 
   const changeRole = useMutation({
-    mutationFn: ({ id, role }: { id: string; role: string }) =>
-      fetch(`/api/admin/users/${id}/role`, {
+    mutationFn: async ({ id, role }: { id: string; role: string }) => {
+      const res = await fetch(`/api/admin/users/${id}/role`, {
         method: 'PUT',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ role }),
-      }).then((r) => r.json()),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'users'] }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error || 'Gagal mengubah role')
+      return json
+    },
+    onSuccess: (_data, vars) => {
+      queryClient.invalidateQueries({ queryKey: ['admin', 'users'] })
+      notifySuccess({ message: `Role diubah ke ${vars.role}.` })
+    },
+    onError: (err) => notifyError(err),
   })
 
   const toggleBlock = useMutation({
-    mutationFn: ({ id, blocked }: { id: string; blocked: boolean }) =>
-      fetch(`/api/admin/users/${id}/block`, {
+    mutationFn: async ({ id, blocked }: { id: string; blocked: boolean }) => {
+      const res = await fetch(`/api/admin/users/${id}/block`, {
         method: 'PUT',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ blocked }),
-      }).then((r) => r.json()),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'users'] }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error || 'Gagal memperbarui status')
+      return json
+    },
+    onSuccess: (_data, vars) => {
+      queryClient.invalidateQueries({ queryKey: ['admin', 'users'] })
+      notifySuccess({ message: vars.blocked ? 'User diblokir.' : 'User diaktifkan kembali.' })
+    },
+    onError: (err) => notifyError(err),
   })
 
   const users = data?.users ?? []

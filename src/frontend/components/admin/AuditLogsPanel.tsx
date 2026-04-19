@@ -16,7 +16,9 @@ import { modals } from '@mantine/modals'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { TbFileText, TbRefresh, TbTrash, TbUser } from 'react-icons/tb'
+import { EmptyRow } from '@/frontend/components/shared/EmptyState'
 import { type Role, useSession } from '@/frontend/hooks/useAuth'
+import { notifyError, notifySuccess } from '@/frontend/lib/notify'
 
 interface AdminUser {
   id: string
@@ -80,7 +82,11 @@ export function AuditLogsPanel() {
   const clearLogs = useMutation({
     mutationFn: () =>
       fetch('/api/admin/logs/audit', { method: 'DELETE', credentials: 'include' }).then((r) => r.json()),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'logs', 'audit'] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin', 'logs', 'audit'] })
+      notifySuccess({ message: 'Audit log dikosongkan.' })
+    },
+    onError: (err) => notifyError(err),
   })
 
   const logs = data?.logs ?? []
@@ -167,18 +173,22 @@ export function AuditLogsPanel() {
               {isLoading && (
                 <Table.Tr>
                   <Table.Td colSpan={5}>
-                    <Text ta="center" c="dimmed" py="md">
-                      Loading...
-                    </Text>
+                    <EmptyRow icon={TbFileText} title="Memuat audit log…" />
                   </Table.Td>
                 </Table.Tr>
               )}
               {logs.length === 0 && !isLoading && (
                 <Table.Tr>
                   <Table.Td colSpan={5}>
-                    <Text ta="center" c="dimmed" py="md">
-                      Belum ada log
-                    </Text>
+                    <EmptyRow
+                      icon={TbFileText}
+                      title="Belum ada audit log"
+                      message={
+                        actionFilter || userFilter
+                          ? 'Tidak ada log yang cocok dengan filter. Reset filter untuk melihat semua.'
+                          : 'Audit log akan muncul saat ada aktivitas login, role change, atau block/unblock.'
+                      }
+                    />
                   </Table.Td>
                 </Table.Tr>
               )}

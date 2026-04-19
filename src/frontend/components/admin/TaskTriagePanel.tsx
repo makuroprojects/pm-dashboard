@@ -4,6 +4,7 @@ import {
   Card,
   Container,
   Group,
+  Pagination,
   SegmentedControl,
   Select,
   SimpleGrid,
@@ -17,8 +18,9 @@ import {
 } from '@mantine/core'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { TbAlertTriangle, TbBan, TbClock, TbListCheck, TbRefresh, TbSearch, TbUserQuestion } from 'react-icons/tb'
+import { EmptyRow } from '@/frontend/components/shared/EmptyState'
 
 type TaskStatus = 'OPEN' | 'IN_PROGRESS' | 'READY_FOR_QC' | 'REOPENED' | 'CLOSED'
 type TaskPriority = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'
@@ -63,6 +65,7 @@ const KIND_COLOR: Record<TaskKind, string> = {
 }
 
 const STALE_DAYS = 7
+const PAGE_SIZE = 25
 
 function isOpen(t: TriageTask) {
   return t.status !== 'CLOSED'
@@ -105,6 +108,7 @@ export function TaskTriagePanel() {
   const [priorityFilter, setPriorityFilter] = useState<string | null>(null)
   const [assigneeFilter, setAssigneeFilter] = useState<string | null>(null)
   const [quick, setQuick] = useState<QuickFilter>('all')
+  const [page, setPage] = useState(1)
 
   const { data, isLoading, refetch, isFetching } = useQuery({
     queryKey: ['admin', 'task-triage'],
@@ -161,6 +165,14 @@ export function TaskTriagePanel() {
       return true
     })
   }, [tasks, quick, projectFilter, statusFilter, priorityFilter, assigneeFilter, search])
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
+  const safePage = Math.min(page, totalPages)
+  const pagedFiltered = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset page when filters change
+  useEffect(() => {
+    setPage(1)
+  }, [quick, projectFilter, statusFilter, priorityFilter, assigneeFilter, search])
 
   const openTask = (t: TriageTask) => {
     navigate({ to: '/pm', search: { tab: 'tasks', projectId: t.project.id, taskId: t.id } })
@@ -303,22 +315,22 @@ export function TaskTriagePanel() {
               {isLoading && (
                 <Table.Tr>
                   <Table.Td colSpan={7}>
-                    <Text ta="center" c="dimmed" py="md">
-                      Loading...
-                    </Text>
+                    <EmptyRow icon={TbListCheck} title="Memuat task…" />
                   </Table.Td>
                 </Table.Tr>
               )}
               {!isLoading && filtered.length === 0 && (
                 <Table.Tr>
                   <Table.Td colSpan={7}>
-                    <Text ta="center" c="dimmed" py="md">
-                      Tidak ada task yang cocok.
-                    </Text>
+                    <EmptyRow
+                      icon={TbSearch}
+                      title="Tidak ada task yang cocok"
+                      message="Coba ubah filter atau reset pencarian."
+                    />
                   </Table.Td>
                 </Table.Tr>
               )}
-              {filtered.map((t) => {
+              {pagedFiltered.map((t) => {
                 const overdue = isOverdue(t)
                 const stale = isStale(t)
                 return (
@@ -379,6 +391,15 @@ export function TaskTriagePanel() {
               })}
             </Table.Tbody>
           </Table>
+          {filtered.length > PAGE_SIZE && (
+            <Group justify="space-between" p="md">
+              <Text size="xs" c="dimmed">
+                {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, filtered.length)} dari{' '}
+                {filtered.length}
+              </Text>
+              <Pagination value={safePage} onChange={setPage} total={totalPages} size="sm" />
+            </Group>
+          )}
         </Card>
       </Stack>
     </Container>

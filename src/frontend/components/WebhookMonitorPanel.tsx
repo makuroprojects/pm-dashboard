@@ -4,6 +4,7 @@ import {
   Card,
   Code,
   Group,
+  Pagination,
   SegmentedControl,
   SimpleGrid,
   Stack,
@@ -19,6 +20,8 @@ import { TbActivity, TbAlertTriangle, TbChartBar, TbCheck, TbRefresh, TbShieldOf
 import { EChart } from './charts/EChart'
 
 type Status = 'all' | 'ok' | 'fail' | 'auth'
+
+const PAGE_SIZE = 25
 
 interface TokenRef {
   id: string
@@ -93,6 +96,7 @@ function statusColor(code: number): string {
 
 export function WebhookMonitorPanel() {
   const [filter, setFilter] = useState<Status>('all')
+  const [page, setPage] = useState(1)
 
   const statsQuery = useQuery<StatsResponse>({
     queryKey: ['webhook-stats'],
@@ -116,6 +120,11 @@ export function WebhookMonitorPanel() {
 
   const s = statsQuery.data?.summary
   const successPct = s?.successRate24h == null ? '—' : `${Math.round(s.successRate24h * 100)}%`
+
+  const logs = logsQuery.data?.logs ?? []
+  const totalPages = Math.max(1, Math.ceil(logs.length / PAGE_SIZE))
+  const safePage = Math.min(page, totalPages)
+  const pagedLogs = logs.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
 
   const seriesOpt = useMemo<EChartsOption | null>(() => {
     const series = statsQuery.data?.series
@@ -383,7 +392,10 @@ export function WebhookMonitorPanel() {
           <SegmentedControl
             size="xs"
             value={filter}
-            onChange={(v) => setFilter(v as Status)}
+            onChange={(v) => {
+              setFilter(v as Status)
+              setPage(1)
+            }}
             data={[
               { label: 'All', value: 'all' },
               { label: 'Success', value: 'ok' },
@@ -405,8 +417,8 @@ export function WebhookMonitorPanel() {
             </Table.Tr>
           </Table.Thead>
           <Table.Tbody>
-            {logsQuery.data?.logs.length ? (
-              logsQuery.data.logs.map((row) => (
+            {pagedLogs.length ? (
+              pagedLogs.map((row) => (
                 <Table.Tr key={row.id}>
                   <Table.Td>{formatRelative(row.createdAt)}</Table.Td>
                   <Table.Td>
@@ -460,6 +472,14 @@ export function WebhookMonitorPanel() {
             )}
           </Table.Tbody>
         </Table>
+        {logs.length > PAGE_SIZE && (
+          <Group justify="space-between" mt="sm">
+            <Text size="xs" c="dimmed">
+              {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, logs.length)} of {logs.length}
+            </Text>
+            <Pagination value={safePage} onChange={setPage} total={totalPages} size="sm" />
+          </Group>
+        )}
       </Card>
     </Stack>
   )

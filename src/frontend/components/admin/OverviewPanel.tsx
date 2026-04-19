@@ -5,6 +5,7 @@ import {
   Card,
   Group,
   Progress,
+  SegmentedControl,
   SimpleGrid,
   Skeleton,
   Stack,
@@ -15,12 +16,14 @@ import {
 } from '@mantine/core'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
+import type { EChartsOption } from 'echarts'
 import { useEffect, useMemo, useState } from 'react'
 import {
   TbActivity,
   TbAlertTriangle,
   TbFlame,
   TbHeartbeat,
+  TbInfoCircle,
   TbListCheck,
   TbPlugConnected,
   TbRefresh,
@@ -29,7 +32,10 @@ import {
   type TbUsers,
   TbUsersGroup,
 } from 'react-icons/tb'
+import { EmptyState } from '@/frontend/components/shared/EmptyState'
+import { SectionSkeleton } from '@/frontend/components/shared/LoadingState'
 import type { Role } from '@/frontend/hooks/useAuth'
+import { EChart } from '../charts/EChart'
 import { type AnalyticsData, AnalyticsSection } from './AnalyticsSection'
 
 interface AdminUser {
@@ -343,7 +349,7 @@ export function OverviewPanel() {
     <Stack gap="lg">
       <Group justify="space-between">
         <div>
-          <Title order={2}>Admin Overview</Title>
+          <Title order={2}>Ringkasan Admin</Title>
           <Text c="dimmed" size="sm">
             Ringkasan sistem real-time. Auto-refresh 30 detik.
           </Text>
@@ -364,42 +370,46 @@ export function OverviewPanel() {
 
       <SimpleGrid cols={{ base: 1, sm: 2, md: 4 }} spacing="md">
         <KpiCard
-          label="Total Users"
+          label="Total Pengguna"
           value={stats.totalUsers}
-          sub={stats.blocked > 0 ? `${stats.blocked} blocked` : 'none blocked'}
+          sub={stats.blocked > 0 ? `${stats.blocked} diblokir` : 'tidak ada yang diblokir'}
           subColor={stats.blocked > 0 ? 'red' : undefined}
           icon={TbUsersGroup}
           color="violet"
           onClick={() => navigate({ to: '/admin', search: { tab: 'users' } })}
           loading={loading}
+          info="Jumlah seluruh akun terdaftar (semua role). Sub-label menampilkan berapa user yang saat ini diblokir. Klik untuk membuka tab Pengguna."
         />
         <KpiCard
-          label="Active Projects"
+          label="Proyek Aktif"
           value={stats.activeProjects}
-          sub={`of ${stats.totalProjects} total`}
+          sub={`dari ${stats.totalProjects} total`}
           icon={TbTarget}
           color="blue"
           onClick={() => navigate({ to: '/admin', search: { tab: 'projects' } })}
           loading={loading}
+          info="Project berstatus ACTIVE dari total semua project (termasuk DRAFT, ON_HOLD, COMPLETED, CANCELLED). Klik untuk membuka tab Proyek."
         />
         <KpiCard
-          label="Open Tasks"
+          label="Task Terbuka"
           value={stats.openTasks}
-          sub={stats.overdueTasks > 0 ? `${stats.overdueTasks} overdue` : 'none overdue'}
+          sub={stats.overdueTasks > 0 ? `${stats.overdueTasks} overdue` : 'tidak ada yang overdue'}
           subColor={stats.overdueTasks > 0 ? 'red' : undefined}
           icon={TbListCheck}
           color="red"
           onClick={() => navigate({ to: '/admin', search: { tab: 'tasks' } })}
           loading={loading}
+          info="Task yang belum CLOSED (OPEN / IN_PROGRESS / READY_FOR_QC / REOPENED). Sub-label menghitung yang sudah lewat dueAt. Klik untuk membuka tab Triase Task."
         />
         <KpiCard
-          label="Live Agents"
+          label="Agent Aktif"
           value={stats.liveAgents}
-          sub={stats.pendingAgents > 0 ? `${stats.pendingAgents} pending approval` : 'all approved'}
+          sub={stats.pendingAgents > 0 ? `${stats.pendingAgents} menunggu approval` : 'semua disetujui'}
           subColor={stats.pendingAgents > 0 ? 'orange' : undefined}
           icon={TbPlugConnected}
           color="teal"
           loading={loading}
+          info="Agent pm-watch yang APPROVED dan mengirim heartbeat <5 menit terakhir. Pending approval perlu di-assign ke user di Konsol Dev → Agents."
         />
       </SimpleGrid>
 
@@ -414,10 +424,10 @@ export function OverviewPanel() {
       ) : healthQ.data && healthQ.data.projects.length > 0 ? (
         <PortfolioHealthSection rows={healthQ.data.projects} navigate={navigate} />
       ) : healthQ.data ? (
-        <EmptyStateCard
+        <EmptyState
           icon={TbHeartbeat}
           color="blue"
-          title="Portfolio health"
+          title="Kesehatan Portfolio"
           message="Belum ada project aktif. Buat project untuk melihat skor kesehatan A–F."
           ctaLabel="Buka Projects"
           onCta={() => navigate({ to: '/admin', search: { tab: 'projects' } })}
@@ -429,10 +439,10 @@ export function OverviewPanel() {
       ) : loadQ.data && loadQ.data.rows.length > 0 ? (
         <TeamLoadSection rows={loadQ.data.rows} />
       ) : loadQ.data ? (
-        <EmptyStateCard
+        <EmptyState
           icon={TbUsersGroup}
           color="violet"
-          title="Team load"
+          title="Beban Tim"
           message="Belum ada task aktif yang di-assign. Team load akan muncul saat user punya beban kerja."
         />
       ) : null}
@@ -448,7 +458,17 @@ export function OverviewPanel() {
           <Group gap="xs" justify="space-between">
             <Group gap="xs">
               <TbActivity size={16} />
-              <Title order={5}>Recent Activity</Title>
+              <Title order={5}>Aktivitas Terbaru</Title>
+              <Tooltip
+                multiline
+                w={320}
+                withArrow
+                label="8 entri terakhir dari audit log: login/logout, perubahan role, block/unblock user, persetujuan/revoke agent, dan perubahan peran project-member. Badge berwarna menunjukkan jenis aksi."
+              >
+                <ThemeIcon variant="subtle" color="gray" size="sm" radius="xl" style={{ cursor: 'help' }}>
+                  <TbInfoCircle size={14} />
+                </ThemeIcon>
+              </Tooltip>
             </Group>
             <Text size="xs" c="dimmed">
               last 8 entries
@@ -503,9 +523,21 @@ export function OverviewPanel() {
               <TbAlertTriangle size={18} />
             </ThemeIcon>
             <div style={{ flex: 1 }}>
-              <Text size="sm" fw={500}>
-                {stats.pendingAgents} agent{stats.pendingAgents > 1 ? 's' : ''} menunggu persetujuan
-              </Text>
+              <Group gap={4} wrap="nowrap">
+                <Text size="sm" fw={500}>
+                  {stats.pendingAgents} agent{stats.pendingAgents > 1 ? 's' : ''} menunggu persetujuan
+                </Text>
+                <Tooltip
+                  multiline
+                  w={320}
+                  withArrow
+                  label="Agent pm-watch status PENDING. Event yang dikirim sebelum approval akan di-reject sampai agent di-assign ke user. Approve di Dev Console → Agents (hanya SUPER_ADMIN)."
+                >
+                  <ThemeIcon variant="subtle" color="gray" size="sm" radius="xl" style={{ cursor: 'help' }}>
+                    <TbInfoCircle size={14} />
+                  </ThemeIcon>
+                </Tooltip>
+              </Group>
               <Text size="xs" c="dimmed">
                 Approve di Dev Console → Agents panel (SUPER_ADMIN only).
               </Text>
@@ -526,6 +558,7 @@ function KpiCard({
   color,
   onClick,
   loading,
+  info,
 }: {
   label: string
   value: number
@@ -535,14 +568,31 @@ function KpiCard({
   color: string
   onClick?: () => void
   loading?: boolean
+  info?: string
 }) {
   return (
     <Card withBorder padding="lg" radius="md" style={onClick ? { cursor: 'pointer' } : undefined} onClick={onClick}>
       <Group justify="space-between" align="flex-start" wrap="nowrap">
         <Stack gap={2} style={{ minWidth: 0, flex: 1 }}>
-          <Text size="xs" c="dimmed" fw={500} tt="uppercase">
-            {label}
-          </Text>
+          <Group gap={4} wrap="nowrap">
+            <Text size="xs" c="dimmed" fw={500} tt="uppercase">
+              {label}
+            </Text>
+            {info && (
+              <Tooltip multiline w={280} withArrow label={info}>
+                <ThemeIcon
+                  variant="subtle"
+                  color="gray"
+                  size="xs"
+                  radius="xl"
+                  style={{ cursor: 'help' }}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <TbInfoCircle size={12} />
+                </ThemeIcon>
+              </Tooltip>
+            )}
+          </Group>
           {loading ? (
             <Skeleton height={28} width={60} radius="sm" my={2} />
           ) : (
@@ -568,49 +618,47 @@ function KpiCard({
   )
 }
 
-function EmptyStateCard({
-  icon: Icon,
-  color,
-  title,
-  message,
-  ctaLabel,
-  onCta,
-}: {
-  icon: typeof TbUsers
-  color: string
-  title: string
-  message: string
-  ctaLabel?: string
-  onCta?: () => void
-}) {
-  return (
-    <Card withBorder padding="md" radius="md">
-      <Group gap="sm" align="flex-start" wrap="nowrap">
-        <ThemeIcon variant="light" color={color} size="md" radius="md">
-          <Icon size={16} />
-        </ThemeIcon>
-        <Stack gap={2} style={{ flex: 1, minWidth: 0 }}>
-          <Text size="sm" fw={600}>
-            {title}
-          </Text>
-          <Text size="xs" c="dimmed">
-            {message}
-          </Text>
-        </Stack>
-        {ctaLabel && onCta && (
-          <Text size="xs" c={color} fw={500} style={{ cursor: 'pointer', whiteSpace: 'nowrap' }} onClick={onCta}>
-            {ctaLabel} →
-          </Text>
-        )}
-      </Group>
-    </Card>
-  )
-}
+const RISK_BAR_COLORS = ['#fa5252', '#fd7e14', '#e03131', '#fab005', '#ffd43b', '#c92a2a']
 
 function RedFlagsSection({ risks, navigate }: { risks: RiskReport; navigate: ReturnType<typeof useNavigate> }) {
   const s = risks.summary
+  const [view, setView] = useState<'chart' | 'list'>('chart')
   const nothing =
     s.overdueTasks + s.staleTasks + s.pastDueProjects + s.pendingAgents + s.offlineAgents + s.missingEnv === 0
+
+  const chartOpt = useMemo<EChartsOption>(() => {
+    const rows = [
+      { label: 'Overdue tasks', value: s.overdueTasks },
+      { label: 'Stale IN_PROGRESS', value: s.staleTasks },
+      { label: 'Past-due projects', value: s.pastDueProjects },
+      { label: 'Pending agents', value: s.pendingAgents },
+      { label: 'Offline agents', value: s.offlineAgents },
+      { label: 'Missing env', value: s.missingEnv },
+    ]
+    return {
+      tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+      grid: { left: 140, right: 24, top: 8, bottom: 8, containLabel: false },
+      xAxis: { type: 'value', minInterval: 1, splitLine: { show: true } },
+      yAxis: {
+        type: 'category',
+        data: rows.map((r) => r.label),
+        inverse: true,
+        axisLine: { show: false },
+        axisTick: { show: false },
+      },
+      series: [
+        {
+          type: 'bar',
+          data: rows.map((r, i) => ({
+            value: r.value,
+            itemStyle: { color: r.value > 0 ? RISK_BAR_COLORS[i] : '#ced4da', borderRadius: [0, 4, 4, 0] },
+          })),
+          barMaxWidth: 22,
+          label: { show: true, position: 'right', fontSize: 11, color: 'inherit' },
+        },
+      ],
+    }
+  }, [s])
 
   if (nothing) {
     return (
@@ -629,21 +677,50 @@ function RedFlagsSection({ risks, navigate }: { risks: RiskReport; navigate: Ret
           <ThemeIcon variant="light" color={SEVERITY_COLOR[risks.severity]} size="md" radius="md">
             <TbFlame size={16} />
           </ThemeIcon>
-          <Title order={5}>Red flags</Title>
+          <Title order={5}>Sinyal Peringatan</Title>
           <Badge color={SEVERITY_COLOR[risks.severity]} variant="light" size="sm">
             {risks.severity.toUpperCase()}
           </Badge>
+          <Tooltip
+            multiline
+            w={320}
+            withArrow
+            label="Ringkasan isu yang butuh perhatian saat ini: tugas lewat tenggat, tugas IN_PROGRESS yang mandek, proyek telat, agent pm-watch yang belum disetujui atau offline, dan variabel env wajib yang belum diisi. Severity dihitung otomatis (high/medium/low/none) dari kombinasi sinyal tersebut."
+          >
+            <ThemeIcon variant="subtle" color="gray" size="sm" radius="xl" style={{ cursor: 'help' }}>
+              <TbInfoCircle size={14} />
+            </ThemeIcon>
+          </Tooltip>
         </Group>
+        <SegmentedControl
+          size="xs"
+          value={view}
+          onChange={(v) => setView(v as 'chart' | 'list')}
+          data={[
+            { label: 'Chart', value: 'chart' },
+            { label: 'List', value: 'list' },
+          ]}
+        />
       </Group>
 
-      <SimpleGrid cols={{ base: 2, md: 3, lg: 6 }} spacing="xs" mb="md">
-        <RiskStat label="Overdue tasks" value={s.overdueTasks} color={s.overdueTasks > 0 ? 'red' : 'gray'} />
-        <RiskStat label="Stale IN_PROGRESS" value={s.staleTasks} color={s.staleTasks > 0 ? 'orange' : 'gray'} />
-        <RiskStat label="Past-due projects" value={s.pastDueProjects} color={s.pastDueProjects > 0 ? 'red' : 'gray'} />
-        <RiskStat label="Pending agents" value={s.pendingAgents} color={s.pendingAgents > 0 ? 'orange' : 'gray'} />
-        <RiskStat label="Offline agents" value={s.offlineAgents} color={s.offlineAgents > 0 ? 'yellow' : 'gray'} />
-        <RiskStat label="Missing env" value={s.missingEnv} color={s.missingEnv > 0 ? 'red' : 'gray'} />
-      </SimpleGrid>
+      {view === 'chart' ? (
+        <div style={{ marginBottom: 12 }}>
+          <EChart option={chartOpt} height={200} />
+        </div>
+      ) : (
+        <SimpleGrid cols={{ base: 2, md: 3, lg: 6 }} spacing="xs" mb="md">
+          <RiskStat label="Overdue tasks" value={s.overdueTasks} color={s.overdueTasks > 0 ? 'red' : 'gray'} />
+          <RiskStat label="Stale IN_PROGRESS" value={s.staleTasks} color={s.staleTasks > 0 ? 'orange' : 'gray'} />
+          <RiskStat
+            label="Past-due projects"
+            value={s.pastDueProjects}
+            color={s.pastDueProjects > 0 ? 'red' : 'gray'}
+          />
+          <RiskStat label="Pending agents" value={s.pendingAgents} color={s.pendingAgents > 0 ? 'orange' : 'gray'} />
+          <RiskStat label="Offline agents" value={s.offlineAgents} color={s.offlineAgents > 0 ? 'yellow' : 'gray'} />
+          <RiskStat label="Missing env" value={s.missingEnv} color={s.missingEnv > 0 ? 'red' : 'gray'} />
+        </SimpleGrid>
+      )}
 
       {risks.missingEnv.length > 0 && (
         <Alert color="red" variant="light" mb="xs">
@@ -729,7 +806,17 @@ function PortfolioHealthSection({ rows, navigate }: { rows: HealthRow[]; navigat
         <ThemeIcon variant="light" color="blue" size="md" radius="md">
           <TbHeartbeat size={16} />
         </ThemeIcon>
-        <Title order={5}>Portfolio health</Title>
+        <Title order={5}>Kesehatan Portfolio</Title>
+        <Tooltip
+          multiline
+          w={340}
+          withArrow
+          label="Skor kesehatan 0–100 per project (A–F). Mulai dari 100 dan dikurangi: -35 jika past-due, -5 per overdue task (max 25), -3 per blocked task (max 15), -10 jika extensions >2, tambahan -5 jika >4, -10 jika project ACTIVE tanpa aktivitas. Diurutkan dari skor terburuk."
+        >
+          <ThemeIcon variant="subtle" color="gray" size="sm" radius="xl" style={{ cursor: 'help' }}>
+            <TbInfoCircle size={14} />
+          </ThemeIcon>
+        </Tooltip>
         <Text size="xs" c="dimmed">
           sorted by score (worst first)
         </Text>
@@ -791,7 +878,17 @@ function TeamLoadSection({ rows }: { rows: LoadRow[] }) {
         <ThemeIcon variant="light" color="violet" size="md" radius="md">
           <TbUsersGroup size={16} />
         </ThemeIcon>
-        <Title order={5}>Team load</Title>
+        <Title order={5}>Beban Tim</Title>
+        <Tooltip
+          multiline
+          w={340}
+          withArrow
+          label="Beban kerja per user: jumlah task open, total estimasi jam, task prioritas tinggi, dan task overdue. User ditandai 'overloaded' jika open ≥10, estimasi >80 jam, atau overdue ≥3. Bar progress relatif terhadap user dengan open terbanyak."
+        >
+          <ThemeIcon variant="subtle" color="gray" size="sm" radius="xl" style={{ cursor: 'help' }}>
+            <TbInfoCircle size={14} />
+          </ThemeIcon>
+        </Tooltip>
         <Text size="xs" c="dimmed">
           sorted by open tasks
         </Text>
@@ -835,10 +932,6 @@ function TeamLoadSection({ rows }: { rows: LoadRow[] }) {
       </Stack>
     </Card>
   )
-}
-
-function SectionSkeleton({ height }: { height: number }) {
-  return <Skeleton height={height} radius="md" />
 }
 
 function useFreshness(timestamp: number) {

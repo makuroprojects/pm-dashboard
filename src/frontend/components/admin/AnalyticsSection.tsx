@@ -1,7 +1,7 @@
-import { Badge, Card, Group, SimpleGrid, Stack, Text, ThemeIcon, Title } from '@mantine/core'
+import { Badge, Card, Group, SimpleGrid, Stack, Text, ThemeIcon, Title, Tooltip } from '@mantine/core'
 import type { EChartsOption } from 'echarts'
 import { useMemo } from 'react'
-import { TbCalendarEvent, TbChartDonut, TbChartLine, TbTimeline } from 'react-icons/tb'
+import { TbCalendarEvent, TbChartDonut, TbChartLine, TbInfoCircle, TbTimeline } from 'react-icons/tb'
 import { EChart } from '../charts/EChart'
 
 type ProjectStatus = 'DRAFT' | 'ACTIVE' | 'ON_HOLD' | 'COMPLETED' | 'CANCELLED'
@@ -184,6 +184,16 @@ function TimelineBlock({ timeline }: { timeline: AnalyticsData['timeline'] }) {
           <TbTimeline size={16} />
         </ThemeIcon>
         <Title order={5}>Project timeline</Title>
+        <Tooltip
+          multiline
+          w={340}
+          withArrow
+          label="Bar Gantt per project aktif dari startsAt → endsAt. Warna bar mengikuti priority (gray/blue/orange/red). ON_HOLD ditampilkan semi-transparan. Garis merah putus-putus = hari ini. Hover bar untuk detail + flag 'slipped' (endsAt pernah di-extend)."
+        >
+          <ThemeIcon variant="subtle" color="gray" size="sm" radius="xl" style={{ cursor: 'help' }}>
+            <TbInfoCircle size={14} />
+          </ThemeIcon>
+        </Tooltip>
         <Text size="xs" c="dimmed">
           active projects · today marker
         </Text>
@@ -244,6 +254,16 @@ function StatusDonuts({
           <TbChartDonut size={16} />
         </ThemeIcon>
         <Title order={5}>Status breakdown</Title>
+        <Tooltip
+          multiline
+          w={340}
+          withArrow
+          label="Dua donut: distribusi Projects (DRAFT/ACTIVE/ON_HOLD/COMPLETED/CANCELLED) dan distribusi Tasks (OPEN/IN_PROGRESS/READY_FOR_QC/REOPENED/CLOSED). Hover segmen untuk jumlah + persentase."
+        >
+          <ThemeIcon variant="subtle" color="gray" size="sm" radius="xl" style={{ cursor: 'help' }}>
+            <TbInfoCircle size={14} />
+          </ThemeIcon>
+        </Tooltip>
       </Group>
       <SimpleGrid cols={2} spacing="xs">
         {hasProject ? (
@@ -322,6 +342,16 @@ function TaskTrendBlock({ trend }: { trend: AnalyticsData['taskTrend'] }) {
             <TbChartLine size={16} />
           </ThemeIcon>
           <Title order={5}>Task trend</Title>
+          <Tooltip
+            multiline
+            w={340}
+            withArrow
+            label="Dua garis harian untuk N hari terakhir: Created (task baru dibuat, biru) vs Closed (task berpindah ke CLOSED, hijau). Closed konsisten di bawah Created berarti backlog tumbuh."
+          >
+            <ThemeIcon variant="subtle" color="gray" size="sm" radius="xl" style={{ cursor: 'help' }}>
+              <TbInfoCircle size={14} />
+            </ThemeIcon>
+          </Tooltip>
           <Text size="xs" c="dimmed">
             last {trend.length} days
           </Text>
@@ -355,6 +385,16 @@ function DeadlineGroupsBlock({ groups }: { groups: AnalyticsData['deadlineGroups
           <TbCalendarEvent size={16} />
         </ThemeIcon>
         <Title order={5}>Deadline groups</Title>
+        <Tooltip
+          multiline
+          w={340}
+          withArrow
+          label="Project dikelompokkan berdasarkan endsAt vs hari ini: Past-due (sudah lewat), Ending <7d (deadline dalam 7 hari), Ending 7–30d (bulan ini). Per kolom tampil 6 project teratas dengan badge priority + sisa/lewat hari."
+        >
+          <ThemeIcon variant="subtle" color="gray" size="sm" radius="xl" style={{ cursor: 'help' }}>
+            <TbInfoCircle size={14} />
+          </ThemeIcon>
+        </Tooltip>
         <Text size="xs" c="dimmed">
           grouped by endsAt
         </Text>

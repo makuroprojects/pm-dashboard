@@ -42,6 +42,7 @@ uploads/
 # Playwright MCP artifacts & ad-hoc screenshots
 .playwright-mcp/
 .claude/scheduled_tasks.lock
+.claude/hooks/
 /*.png
 
 # Dev server PID guard

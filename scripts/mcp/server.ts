@@ -14,6 +14,7 @@ import { presenceTools } from './tools/presence'
 import { projectTools } from './tools/project'
 import { projectsReadonly, projectsTools } from './tools/projects'
 import { redisTools } from './tools/redis'
+import { tagsReadonly, tagsTools } from './tools/tags'
 import { tasksReadonly, tasksTools } from './tools/tasks'
 import { webhooksTools, webhooksReadonly } from './tools/webhooks'
 import type { McpScope, ToolModule } from './tools/shared'
@@ -32,6 +33,7 @@ const READONLY_MODULES: ToolModule[] = [
   githubReadonly,
   projectsReadonly,
   tasksReadonly,
+  tagsReadonly,
   milestonesReadonly,
   overviewReadonly,
 ]
@@ -46,6 +48,7 @@ const ADMIN_MODULES: ToolModule[] = [
   webhooksTools,
   projectsTools,
   tasksTools,
+  tagsTools,
   milestonesTools,
 ]
 

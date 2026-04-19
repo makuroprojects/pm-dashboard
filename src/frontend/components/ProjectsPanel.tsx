@@ -44,6 +44,7 @@ import {
   TbX,
 } from 'react-icons/tb'
 import { useSession } from '../hooks/useAuth'
+import { notifyError, notifySuccess } from '../lib/notify'
 import { EChart } from './charts/EChart'
 
 export type MemberRole = 'OWNER' | 'PM' | 'MEMBER' | 'VIEWER'
@@ -306,10 +307,12 @@ export function ProjectsPanel() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       }),
-    onSuccess: () => {
+    onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ['projects'] })
       setCreateOpen(false)
+      notifySuccess({ message: `Project "${res.project.name}" dibuat.` })
     },
+    onError: (err) => notifyError(err),
   })
 
   const projects = projectsQ.data?.projects ?? []
@@ -1067,7 +1070,9 @@ export function MembersSection({
       qc.invalidateQueries({ queryKey: ['projects'] })
       setAddUserId(null)
       setAddRole('MEMBER')
+      notifySuccess({ message: 'Member ditambahkan.' })
     },
+    onError: (err) => notifyError(err),
   })
 
   const changeRole = useMutation({
@@ -1077,10 +1082,12 @@ export function MembersSection({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ role }),
       }),
-    onSuccess: () => {
+    onSuccess: (_d, vars) => {
       qc.invalidateQueries({ queryKey: ['project', projectId] })
       qc.invalidateQueries({ queryKey: ['projects'] })
+      notifySuccess({ message: `Role member diubah ke ${vars.role}.` })
     },
+    onError: (err) => notifyError(err),
   })
 
   const removeMember = useMutation({
@@ -1088,7 +1095,9 @@ export function MembersSection({
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['project', projectId] })
       qc.invalidateQueries({ queryKey: ['projects'] })
+      notifySuccess({ message: 'Member dikeluarkan.' })
     },
+    onError: (err) => notifyError(err),
   })
 
   const isSysAdmin = systemRole === 'ADMIN' || systemRole === 'SUPER_ADMIN'
@@ -1241,7 +1250,9 @@ export function ExtensionsSection({
       qc.invalidateQueries({ queryKey: ['project', projectId] })
       qc.invalidateQueries({ queryKey: ['projects'] })
       setExtendOpen(false)
+      notifySuccess({ message: 'Deadline diperpanjang.' })
     },
+    onError: (err) => notifyError(err),
   })
 
   const extensions = historyQ.data?.extensions ?? []
@@ -1510,7 +1521,9 @@ export function MilestonesSection({ projectId, canManage }: { projectId: string;
       qc.invalidateQueries({ queryKey: ['projects'] })
       setTitle('')
       setDueAt(null)
+      notifySuccess({ message: 'Milestone dibuat.' })
     },
+    onError: (err) => notifyError(err),
   })
 
   const update = useMutation({
@@ -1524,7 +1537,9 @@ export function MilestonesSection({ projectId, canManage }: { projectId: string;
       qc.invalidateQueries({ queryKey: ['milestones', projectId] })
       qc.invalidateQueries({ queryKey: ['milestones', 'all'] })
       qc.invalidateQueries({ queryKey: ['projects'] })
+      notifySuccess({ message: 'Milestone diperbarui.' })
     },
+    onError: (err) => notifyError(err),
   })
 
   const remove = useMutation({
@@ -1533,7 +1548,9 @@ export function MilestonesSection({ projectId, canManage }: { projectId: string;
       qc.invalidateQueries({ queryKey: ['milestones', projectId] })
       qc.invalidateQueries({ queryKey: ['milestones', 'all'] })
       qc.invalidateQueries({ queryKey: ['projects'] })
+      notifySuccess({ message: 'Milestone dihapus.' })
     },
+    onError: (err) => notifyError(err),
   })
 
   const milestones = milestonesQ.data?.milestones ?? []

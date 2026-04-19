@@ -44,8 +44,10 @@ import { SystemHealthPanel } from '@/frontend/components/admin/SystemHealthPanel
 import { TaskTriagePanel } from '@/frontend/components/admin/TaskTriagePanel'
 import { UsersPanel } from '@/frontend/components/admin/UsersPanel'
 import { NotificationBell } from '@/frontend/components/NotificationBell'
+import { SectionErrorBoundary } from '@/frontend/components/shared/SectionErrorBoundary'
 import { ThemeToggle } from '@/frontend/components/ThemeToggle'
 import { useLogout, useSession } from '@/frontend/hooks/useAuth'
+import { useNavBadges } from '@/frontend/hooks/useNavBadges'
 
 const validTabs = [
   'overview',
@@ -83,18 +85,39 @@ export const Route = createFileRoute('/admin')({
   component: AdminPage,
 })
 
-type NavItem = { label: string; icon: typeof TbLayoutDashboard; key: TabKey }
+type NavItem = {
+  label: string
+  icon: typeof TbLayoutDashboard
+  key: TabKey
+  badgeKey?: 'pastDueProjects' | 'overdueTasks' | 'offlineAgents' | 'missingEnv'
+  badgeColor?: string
+}
 
-const navItems: NavItem[] = [
-  { label: 'Overview', icon: TbLayoutDashboard, key: 'overview' },
-  { label: 'Users', icon: TbUsers, key: 'users' },
-  { label: 'Audit Logs', icon: TbClipboardList, key: 'audit-logs' },
-  { label: 'Projects', icon: TbTarget, key: 'projects' },
-  { label: 'Task Triage', icon: TbListCheck, key: 'tasks' },
-  { label: 'Effort', icon: TbClockHour3, key: 'effort' },
-  { label: 'Analytics', icon: TbReportAnalytics, key: 'analytics' },
-  { label: 'Sessions', icon: TbPlugConnected, key: 'sessions' },
-  { label: 'System Health', icon: TbHeartbeat, key: 'health' },
+type NavGroup = { label: string; items: NavItem[] }
+
+const navGroups: NavGroup[] = [
+  {
+    label: 'Pantau',
+    items: [
+      { label: 'Ringkasan', icon: TbLayoutDashboard, key: 'overview' },
+      { label: 'Proyek', icon: TbTarget, key: 'projects', badgeKey: 'pastDueProjects', badgeColor: 'red' },
+      { label: 'Triase Task', icon: TbListCheck, key: 'tasks', badgeKey: 'overdueTasks', badgeColor: 'orange' },
+      { label: 'Effort', icon: TbClockHour3, key: 'effort' },
+      { label: 'Analitik', icon: TbReportAnalytics, key: 'analytics' },
+    ],
+  },
+  {
+    label: 'Manajemen',
+    items: [
+      { label: 'Pengguna', icon: TbUsers, key: 'users' },
+      { label: 'Log Audit', icon: TbClipboardList, key: 'audit-logs' },
+      { label: 'Sesi', icon: TbPlugConnected, key: 'sessions' },
+    ],
+  },
+  {
+    label: 'Sistem',
+    items: [{ label: 'Kesehatan Sistem', icon: TbHeartbeat, key: 'health', badgeKey: 'missingEnv', badgeColor: 'red' }],
+  },
 ]
 
 function AdminPage() {
@@ -119,21 +142,26 @@ function AdminPage() {
   }
   const confirmLogout = () =>
     modals.openConfirmModal({
-      title: 'Logout',
-      children: <Text size="sm">Are you sure you want to logout?</Text>,
-      labels: { confirm: 'Logout', cancel: 'Cancel' },
+      title: 'Keluar',
+      children: <Text size="sm">Yakin ingin keluar dari sesi ini?</Text>,
+      labels: { confirm: 'Keluar', cancel: 'Batal' },
       confirmProps: { color: 'red' },
       onConfirm: () => logout.mutate(),
     })
 
   const desktopWidth = collapsed ? 60 : 260
   const isSuper = user?.role === 'SUPER_ADMIN'
+  const badges = useNavBadges(true)
 
   return (
     <AppShell
       header={{ height: 60 }}
       navbar={{ width: desktopWidth, breakpoint: 'sm', collapsed: { mobile: !mobileOpened } }}
       padding="md"
+      styles={{
+        navbar: { backgroundColor: 'var(--app-navbar-bg)' },
+        header: { backgroundColor: 'var(--app-navbar-bg)' },
+      }}
     >
       <AppShell.Header>
         <Group h="100%" px="md" justify="space-between">
@@ -142,7 +170,7 @@ function AdminPage() {
             <ThemeIcon variant="light" color="violet" size="md">
               <TbShieldLock size={18} />
             </ThemeIcon>
-            <Title order={4}>Admin Console</Title>
+            <Title order={4}>Konsol Admin</Title>
           </Group>
           <Group gap="xs">
             <NotificationBell size="md" />
@@ -157,33 +185,68 @@ function AdminPage() {
       </AppShell.Header>
 
       <AppShell.Navbar p={collapsed && !isMobile ? 'xs' : 'md'}>
-        <Stack gap="xs" style={{ flex: 1 }}>
-          {navItems.map((item) => {
-            const Icon = item.icon
-            if (collapsed && !isMobile) {
-              return (
-                <Tooltip key={item.key} label={item.label} position="right" withArrow>
-                  <ActionIcon
-                    variant={active === item.key ? 'filled' : 'subtle'}
-                    color={active === item.key ? 'violet' : 'gray'}
-                    size="lg"
+        <Stack gap={collapsed && !isMobile ? 'xs' : 'md'} style={{ flex: 1, overflowY: 'auto' }}>
+          {navGroups.map((group) => (
+            <Stack key={group.label} gap={4}>
+              {!(collapsed && !isMobile) && (
+                <Text size="xs" fw={700} c="dimmed" tt="uppercase" style={{ letterSpacing: 0.6 }} px="xs" pt={4}>
+                  {group.label}
+                </Text>
+              )}
+              {group.items.map((item) => {
+                const Icon = item.icon
+                const badgeCount = item.badgeKey ? badges[item.badgeKey] : 0
+                if (collapsed && !isMobile) {
+                  return (
+                    <Tooltip
+                      key={item.key}
+                      label={badgeCount > 0 ? `${item.label} (${badgeCount})` : item.label}
+                      position="right"
+                      withArrow
+                    >
+                      <div style={{ position: 'relative' }}>
+                        <ActionIcon
+                          variant={active === item.key ? 'filled' : 'subtle'}
+                          color={active === item.key ? 'violet' : 'gray'}
+                          size="lg"
+                          onClick={() => setActive(item.key)}
+                        >
+                          <Icon size={18} />
+                        </ActionIcon>
+                        {badgeCount > 0 && (
+                          <Badge
+                            size="xs"
+                            color={item.badgeColor ?? 'red'}
+                            variant="filled"
+                            style={{ position: 'absolute', top: -4, right: -4, pointerEvents: 'none' }}
+                          >
+                            {badgeCount > 99 ? '99+' : badgeCount}
+                          </Badge>
+                        )}
+                      </div>
+                    </Tooltip>
+                  )
+                }
+                return (
+                  <NavLink
+                    key={item.key}
+                    label={item.label}
+                    leftSection={<Icon size={18} />}
+                    rightSection={
+                      badgeCount > 0 ? (
+                        <Badge size="xs" color={item.badgeColor ?? 'red'} variant="filled">
+                          {badgeCount > 99 ? '99+' : badgeCount}
+                        </Badge>
+                      ) : null
+                    }
+                    color="violet"
+                    active={active === item.key}
                     onClick={() => setActive(item.key)}
-                  >
-                    <Icon size={18} />
-                  </ActionIcon>
-                </Tooltip>
-              )
-            }
-            return (
-              <NavLink
-                key={item.key}
-                label={item.label}
-                leftSection={<Icon size={18} />}
-                active={active === item.key}
-                onClick={() => setActive(item.key)}
-              />
-            )
-          })}
+                  />
+                )
+              })}
+            </Stack>
+          ))}
         </Stack>
 
         <Stack gap="xs">
@@ -196,7 +259,7 @@ function AdminPage() {
                 onClick={() => navigate({ to: '/pm', search: { tab: 'overview' } })}
                 size="sm"
               >
-                Project Manager
+                Manajer Proyek
               </Button>
               {isSuper && (
                 <Button
@@ -206,7 +269,7 @@ function AdminPage() {
                   onClick={() => navigate({ to: '/dev', search: { tab: 'overview' } })}
                   size="sm"
                 >
-                  Dev Console
+                  Konsol Dev
                 </Button>
               )}
               <Button
@@ -215,7 +278,7 @@ function AdminPage() {
                 onClick={() => navigate({ to: '/settings' })}
                 size="sm"
               >
-                Settings
+                Pengaturan
               </Button>
               <Group justify="space-between">
                 <ThemeToggle size="sm" />
@@ -231,12 +294,12 @@ function AdminPage() {
                 loading={logout.isPending}
                 size="sm"
               >
-                Logout
+                Keluar
               </Button>
             </>
           ) : (
             <Stack gap="xs" align="center">
-              <Tooltip label="Project Manager" position="right" withArrow>
+              <Tooltip label="Manajer Proyek" position="right" withArrow>
                 <ActionIcon
                   variant="light"
                   color="blue"
@@ -247,7 +310,7 @@ function AdminPage() {
                 </ActionIcon>
               </Tooltip>
               {isSuper && (
-                <Tooltip label="Dev Console" position="right" withArrow>
+                <Tooltip label="Konsol Dev" position="right" withArrow>
                   <ActionIcon
                     variant="light"
                     color="orange"
@@ -258,18 +321,18 @@ function AdminPage() {
                   </ActionIcon>
                 </Tooltip>
               )}
-              <Tooltip label="Settings" position="right" withArrow>
+              <Tooltip label="Pengaturan" position="right" withArrow>
                 <ActionIcon variant="subtle" size="lg" onClick={() => navigate({ to: '/settings' })}>
                   <TbUser size={18} />
                 </ActionIcon>
               </Tooltip>
               <ThemeToggle size="sm" />
-              <Tooltip label="Expand sidebar" position="right" withArrow>
+              <Tooltip label="Perluas sidebar" position="right" withArrow>
                 <ActionIcon variant="subtle" onClick={toggleSidebar} size="lg">
                   <TbLayoutSidebarLeftExpand size={18} />
                 </ActionIcon>
               </Tooltip>
-              <Tooltip label="Logout" position="right" withArrow>
+              <Tooltip label="Keluar" position="right" withArrow>
                 <ActionIcon variant="light" color="red" size="lg" onClick={confirmLogout} loading={logout.isPending}>
                   <TbLogout size={18} />
                 </ActionIcon>
@@ -281,15 +344,17 @@ function AdminPage() {
 
       <AppShell.Main>
         <Container size="xl" px={0}>
-          {active === 'overview' && <OverviewPanel />}
-          {active === 'users' && <UsersPanel />}
-          {active === 'audit-logs' && <AuditLogsPanel />}
-          {active === 'projects' && <ProjectsOverviewPanel />}
-          {active === 'tasks' && <TaskTriagePanel />}
-          {active === 'effort' && <EffortPanel />}
-          {active === 'analytics' && <AnalyticsPanel />}
-          {active === 'sessions' && <SessionsPanel />}
-          {active === 'health' && <SystemHealthPanel />}
+          <SectionErrorBoundary key={active} label={active}>
+            {active === 'overview' && <OverviewPanel />}
+            {active === 'users' && <UsersPanel />}
+            {active === 'audit-logs' && <AuditLogsPanel />}
+            {active === 'projects' && <ProjectsOverviewPanel />}
+            {active === 'tasks' && <TaskTriagePanel />}
+            {active === 'effort' && <EffortPanel />}
+            {active === 'analytics' && <AnalyticsPanel />}
+            {active === 'sessions' && <SessionsPanel />}
+            {active === 'health' && <SystemHealthPanel />}
+          </SectionErrorBoundary>
         </Container>
       </AppShell.Main>
     </AppShell>

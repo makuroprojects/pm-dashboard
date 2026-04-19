@@ -3,7 +3,6 @@ import {
   Alert,
   Anchor,
   Badge,
-  Breadcrumbs,
   Button,
   Card,
   Checkbox,
@@ -47,6 +46,8 @@ import {
   TbUpload,
   TbX,
 } from 'react-icons/tb'
+import { notifyError, notifySuccess } from '../lib/notify'
+import { Breadcrumbs } from './shared/Breadcrumbs'
 
 type TaskStatus = 'OPEN' | 'IN_PROGRESS' | 'READY_FOR_QC' | 'REOPENED' | 'CLOSED'
 type TaskPriority = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'
@@ -249,7 +250,9 @@ export function TaskDetailView({ taskId, onBack }: { taskId: string; onBack: () 
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['task', taskId] })
       qc.invalidateQueries({ queryKey: ['tasks'] })
+      notifySuccess({ message: 'Task diperbarui.' })
     },
+    onError: (err) => notifyError(err),
   })
 
   const tagsQ = useQuery({
@@ -274,12 +277,20 @@ export function TaskDetailView({ taskId, onBack }: { taskId: string; onBack: () 
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ blockedById }),
       }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['task', taskId] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['task', taskId] })
+      notifySuccess({ message: 'Dependency ditambahkan.' })
+    },
+    onError: (err) => notifyError(err),
   })
 
   const removeDependency = useMutation({
     mutationFn: (blockedById: string) => api(`/api/tasks/${taskId}/dependencies/${blockedById}`, { method: 'DELETE' }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['task', taskId] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['task', taskId] })
+      notifySuccess({ message: 'Dependency dihapus.' })
+    },
+    onError: (err) => notifyError(err),
   })
 
   const addChecklist = useMutation({
@@ -293,6 +304,7 @@ export function TaskDetailView({ taskId, onBack }: { taskId: string; onBack: () 
       qc.invalidateQueries({ queryKey: ['task', taskId] })
       qc.invalidateQueries({ queryKey: ['tasks'] })
     },
+    onError: (err) => notifyError(err),
   })
 
   const updateChecklist = useMutation({
@@ -306,6 +318,7 @@ export function TaskDetailView({ taskId, onBack }: { taskId: string; onBack: () 
       qc.invalidateQueries({ queryKey: ['task', taskId] })
       qc.invalidateQueries({ queryKey: ['tasks'] })
     },
+    onError: (err) => notifyError(err),
   })
 
   const removeChecklist = useMutation({
@@ -314,6 +327,7 @@ export function TaskDetailView({ taskId, onBack }: { taskId: string; onBack: () 
       qc.invalidateQueries({ queryKey: ['task', taskId] })
       qc.invalidateQueries({ queryKey: ['tasks'] })
     },
+    onError: (err) => notifyError(err),
   })
 
   const createTag = useMutation({
@@ -323,7 +337,11 @@ export function TaskDetailView({ taskId, onBack }: { taskId: string; onBack: () 
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name }),
       }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['tags', task?.projectId] }),
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: ['tags', task?.projectId] })
+      notifySuccess({ message: `Tag "${res.tag.name}" dibuat.` })
+    },
+    onError: (err) => notifyError(err),
   })
 
   const addComment = useMutation({
@@ -333,7 +351,11 @@ export function TaskDetailView({ taskId, onBack }: { taskId: string; onBack: () 
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ body }),
       }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['task', taskId] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['task', taskId] })
+      notifySuccess({ message: 'Komentar dikirim.' })
+    },
+    onError: (err) => notifyError(err),
   })
 
   const addEvidence = useMutation({
@@ -343,7 +365,11 @@ export function TaskDetailView({ taskId, onBack }: { taskId: string; onBack: () 
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['task', taskId] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['task', taskId] })
+      notifySuccess({ message: 'Evidence ditambahkan.' })
+    },
+    onError: (err) => notifyError(err),
   })
 
   return (
@@ -355,19 +381,13 @@ export function TaskDetailView({ taskId, onBack }: { taskId: string; onBack: () 
               <TbArrowLeft size={18} />
             </ActionIcon>
           </Tooltip>
-          <Breadcrumbs separator="·" style={{ minWidth: 0 }}>
-            <Text size="sm" c="dimmed" onClick={onBack} style={{ cursor: 'pointer' }}>
-              Tasks
-            </Text>
-            {task ? (
-              <Text size="sm" c="dimmed">
-                {task.project.name}
-              </Text>
-            ) : null}
-            <Text size="sm" fw={500} truncate>
-              {task?.title ?? `#${taskId.slice(0, 8)}`}
-            </Text>
-          </Breadcrumbs>
+          <Breadcrumbs
+            items={[
+              { label: 'Tasks', onClick: onBack },
+              ...(task ? [{ label: task.project.name }] : []),
+              { label: task?.title ?? `#${taskId.slice(0, 8)}` },
+            ]}
+          />
         </Group>
         <Tooltip label="Refresh">
           <ActionIcon variant="light" size="lg" onClick={() => taskQ.refetch()} loading={taskQ.isFetching}>
@@ -745,7 +765,9 @@ function EvidenceSection({
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['task', taskId] })
       qc.invalidateQueries({ queryKey: ['tasks'] })
+      notifySuccess({ message: 'Evidence di-upload.' })
     },
+    onError: (err) => notifyError(err),
   })
 
   return (

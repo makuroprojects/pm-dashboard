@@ -47,6 +47,7 @@ import {
   TbCode,
   TbDatabase,
   TbDeviceDesktop,
+  TbFileText,
   TbKey,
   TbLayoutDashboard,
   TbLayoutSidebarLeftCollapse,
@@ -66,11 +67,15 @@ import { AgentsPanel } from '@/frontend/components/AgentsPanel'
 import { AuditLogsPanel } from '@/frontend/components/admin/AuditLogsPanel'
 import { UsersPanel } from '@/frontend/components/admin/UsersPanel'
 import { NotificationBell } from '@/frontend/components/NotificationBell'
+import { EmptyRow } from '@/frontend/components/shared/EmptyState'
+import { SectionErrorBoundary } from '@/frontend/components/shared/SectionErrorBoundary'
 import { ThemeToggle } from '@/frontend/components/ThemeToggle'
 import { WebhookMonitorPanel } from '@/frontend/components/WebhookMonitorPanel'
 import { WebhookTokensPanel } from '@/frontend/components/WebhookTokensPanel'
 import { type Role, useLogout, useSession } from '@/frontend/hooks/useAuth'
+import { useNavBadges } from '@/frontend/hooks/useNavBadges'
 import { usePresence } from '@/frontend/hooks/usePresence'
+import { notifyError, notifySuccess } from '@/frontend/lib/notify'
 
 const validTabs = [
   'overview',
@@ -117,16 +122,52 @@ interface AdminUser {
   createdAt: string
 }
 
-const navItems = [
-  { label: 'Overview', icon: TbLayoutDashboard, key: 'overview' },
-  { label: 'Users', icon: TbUsers, key: 'users' },
-  { label: 'Agents', icon: TbDeviceDesktop, key: 'agents' },
-  { label: 'Webhook Tokens', icon: TbKey, key: 'webhook-tokens' },
-  { label: 'Webhook Monitor', icon: TbChartBar, key: 'webhook-monitor' },
-  { label: 'App Logs', icon: TbServer, key: 'app-logs' },
-  { label: 'Audit Logs', icon: TbUserSearch, key: 'user-logs' },
-  { label: 'Database', icon: TbDatabase, key: 'database' },
-  { label: 'Project', icon: TbSitemap, key: 'project' },
+type DevBadgeKey = 'pendingAgents' | 'webhookFail24h' | 'offlineAgents'
+type DevNavItem = {
+  label: string
+  icon: typeof TbLayoutDashboard
+  key: string
+  badgeKey?: DevBadgeKey
+  badgeColor?: string
+}
+type DevNavGroup = { label: string; items: DevNavItem[] }
+
+const navGroups: DevNavGroup[] = [
+  {
+    label: 'Pantau',
+    items: [
+      { label: 'Ringkasan', icon: TbLayoutDashboard, key: 'overview' },
+      { label: 'Pengguna', icon: TbUsers, key: 'users' },
+    ],
+  },
+  {
+    label: 'pm-watch',
+    items: [
+      { label: 'Agent', icon: TbDeviceDesktop, key: 'agents', badgeKey: 'pendingAgents', badgeColor: 'orange' },
+      { label: 'Token Webhook', icon: TbKey, key: 'webhook-tokens' },
+      {
+        label: 'Monitor Webhook',
+        icon: TbChartBar,
+        key: 'webhook-monitor',
+        badgeKey: 'webhookFail24h',
+        badgeColor: 'red',
+      },
+    ],
+  },
+  {
+    label: 'Log',
+    items: [
+      { label: 'Log Aplikasi', icon: TbServer, key: 'app-logs' },
+      { label: 'Log Audit', icon: TbUserSearch, key: 'user-logs' },
+    ],
+  },
+  {
+    label: 'Struktur',
+    items: [
+      { label: 'Database', icon: TbDatabase, key: 'database' },
+      { label: 'Proyek', icon: TbSitemap, key: 'project' },
+    ],
+  },
 ]
 
 function DevPage() {
@@ -137,6 +178,7 @@ function DevPage() {
   const navigate = useNavigate()
   const [mobileOpened, { toggle: toggleMobile, close: closeMobile }] = useDisclosure(false)
   const isMobile = useMediaQuery('(max-width: 48em)')
+  const badges = useNavBadges(true)
   const setActive = (key: string) => {
     navigate({ to: '/dev', search: { tab: key } })
     closeMobile()
@@ -151,9 +193,9 @@ function DevPage() {
   }
   const confirmLogout = () =>
     modals.openConfirmModal({
-      title: 'Logout',
-      children: <Text size="sm">Are you sure you want to logout?</Text>,
-      labels: { confirm: 'Logout', cancel: 'Cancel' },
+      title: 'Keluar',
+      children: <Text size="sm">Yakin ingin keluar dari sesi ini?</Text>,
+      labels: { confirm: 'Keluar', cancel: 'Batal' },
       confirmProps: { color: 'red' },
       onConfirm: () => logout.mutate(),
     })
@@ -167,6 +209,10 @@ function DevPage() {
         collapsed: { mobile: !mobileOpened },
       }}
       padding="md"
+      styles={{
+        navbar: { backgroundColor: 'var(--app-navbar-bg)' },
+        header: { backgroundColor: 'var(--app-navbar-bg)' },
+      }}
     >
       <AppShell.Header px="md" hiddenFrom="sm">
         <Group h="100%" justify="space-between">
@@ -176,7 +222,7 @@ function DevPage() {
               <TbCode size={16} />
             </ThemeIcon>
             <Text fw={700} size="sm">
-              Dev Console
+              Konsol Dev
             </Text>
           </Group>
           <NotificationBell size="md" />
@@ -186,7 +232,7 @@ function DevPage() {
         <AppShell.Section>
           <Group gap="xs" mb="md" justify={collapsed ? 'center' : 'space-between'}>
             {collapsed ? (
-              <Tooltip label="Expand sidebar" position="right">
+              <Tooltip label="Perluas sidebar" position="right">
                 <ActionIcon variant="subtle" color="gray" size="lg" onClick={toggleSidebar}>
                   <TbLayoutSidebarLeftExpand size={18} />
                 </ActionIcon>
@@ -199,14 +245,14 @@ function DevPage() {
                   </ThemeIcon>
                   <div>
                     <Text fw={700} size="sm">
-                      Dev Console
+                      Konsol Dev
                     </Text>
                     <Text size="xs" c="dimmed">
                       Super Admin
                     </Text>
                   </div>
                 </Group>
-                <Tooltip label="Minimize sidebar">
+                <Tooltip label="Ciutkan sidebar">
                   <ActionIcon variant="subtle" color="gray" size="sm" onClick={toggleSidebar}>
                     <TbLayoutSidebarLeftCollapse size={18} />
                   </ActionIcon>
@@ -216,34 +262,71 @@ function DevPage() {
           </Group>
         </AppShell.Section>
 
-        <AppShell.Section grow>
-          {navItems.map((item) =>
-            collapsed ? (
-              <Tooltip key={item.key} label={item.label} position="right">
-                <ActionIcon
-                  variant={active === item.key ? 'light' : 'subtle'}
-                  color={active === item.key ? 'blue' : 'gray'}
-                  size="lg"
-                  onClick={() => setActive(item.key)}
-                  mb={4}
-                  style={{ width: '100%' }}
-                >
-                  <item.icon size={18} />
-                </ActionIcon>
-              </Tooltip>
-            ) : (
-              <NavLink
-                key={item.key}
-                label={item.label}
-                leftSection={<item.icon size={18} />}
-                rightSection={<TbChevronRight size={14} />}
-                active={active === item.key}
-                onClick={() => setActive(item.key)}
-                variant="light"
-                mb={4}
-              />
-            ),
-          )}
+        <AppShell.Section grow style={{ overflowY: 'auto' }}>
+          {navGroups.map((group) => (
+            <Stack key={group.label} gap={4} mb="sm">
+              {!collapsed && (
+                <Text size="xs" fw={700} c="dimmed" tt="uppercase" style={{ letterSpacing: 0.6 }} px="xs" pt={4}>
+                  {group.label}
+                </Text>
+              )}
+              {group.items.map((item) => {
+                const badgeCount = item.badgeKey ? badges[item.badgeKey] : 0
+                if (collapsed) {
+                  return (
+                    <Tooltip
+                      key={item.key}
+                      label={badgeCount > 0 ? `${item.label} (${badgeCount})` : item.label}
+                      position="right"
+                    >
+                      <div style={{ position: 'relative' }}>
+                        <ActionIcon
+                          variant={active === item.key ? 'light' : 'subtle'}
+                          color={active === item.key ? 'blue' : 'gray'}
+                          size="lg"
+                          onClick={() => setActive(item.key)}
+                          mb={4}
+                          style={{ width: '100%' }}
+                        >
+                          <item.icon size={18} />
+                        </ActionIcon>
+                        {badgeCount > 0 && (
+                          <Badge
+                            size="xs"
+                            color={item.badgeColor ?? 'red'}
+                            variant="filled"
+                            style={{ position: 'absolute', top: -4, right: -4, pointerEvents: 'none' }}
+                          >
+                            {badgeCount > 99 ? '99+' : badgeCount}
+                          </Badge>
+                        )}
+                      </div>
+                    </Tooltip>
+                  )
+                }
+                return (
+                  <NavLink
+                    key={item.key}
+                    label={item.label}
+                    leftSection={<item.icon size={18} />}
+                    rightSection={
+                      badgeCount > 0 ? (
+                        <Badge size="xs" color={item.badgeColor ?? 'red'} variant="filled">
+                          {badgeCount > 99 ? '99+' : badgeCount}
+                        </Badge>
+                      ) : (
+                        <TbChevronRight size={14} />
+                      )
+                    }
+                    active={active === item.key}
+                    onClick={() => setActive(item.key)}
+                    variant="light"
+                    mb={4}
+                  />
+                )
+              })}
+            </Stack>
+          ))}
         </AppShell.Section>
 
         <AppShell.Section>
@@ -255,8 +338,18 @@ function DevPage() {
                     {user?.name?.charAt(0).toUpperCase()}
                   </Avatar>
                 </Tooltip>
+                <Tooltip label="Ke Admin" position="right">
+                  <ActionIcon
+                    variant="subtle"
+                    color="violet"
+                    size="sm"
+                    onClick={() => navigate({ to: '/admin', search: { tab: 'overview' } })}
+                  >
+                    <TbShieldCheck size={14} />
+                  </ActionIcon>
+                </Tooltip>
                 <ThemeToggle size="sm" />
-                <Tooltip label="Logout" position="right">
+                <Tooltip label="Keluar" position="right">
                   <ActionIcon variant="subtle" color="red" size="sm" onClick={confirmLogout} loading={logout.isPending}>
                     <TbLogout size={14} />
                   </ActionIcon>
@@ -278,9 +371,18 @@ function DevPage() {
                   </div>
                 </Group>
                 <Group gap={4}>
+                  <Tooltip label="Ke Admin">
+                    <ActionIcon
+                      variant="subtle"
+                      color="violet"
+                      onClick={() => navigate({ to: '/admin', search: { tab: 'overview' } })}
+                    >
+                      <TbShieldCheck size={16} />
+                    </ActionIcon>
+                  </Tooltip>
                   <NotificationBell size="md" />
                   <ThemeToggle size="sm" />
-                  <Tooltip label="Logout">
+                  <Tooltip label="Keluar">
                     <ActionIcon variant="subtle" color="red" onClick={confirmLogout} loading={logout.isPending}>
                       <TbLogout size={16} />
                     </ActionIcon>
@@ -293,15 +395,17 @@ function DevPage() {
       </AppShell.Navbar>
 
       <AppShell.Main>
-        {active === 'overview' && <OverviewPanel />}
-        {active === 'users' && <UsersPanel />}
-        {active === 'agents' && <AgentsPanel />}
-        {active === 'webhook-tokens' && <WebhookTokensPanel />}
-        {active === 'webhook-monitor' && <WebhookMonitorPanel />}
-        {active === 'app-logs' && <AppLogsPanel />}
-        {active === 'user-logs' && <AuditLogsPanel />}
-        {active === 'database' && <DatabasePanel />}
-        {active === 'project' && <ProjectPanel />}
+        <SectionErrorBoundary key={active} label={active}>
+          {active === 'overview' && <OverviewPanel />}
+          {active === 'users' && <UsersPanel />}
+          {active === 'agents' && <AgentsPanel />}
+          {active === 'webhook-tokens' && <WebhookTokensPanel />}
+          {active === 'webhook-monitor' && <WebhookMonitorPanel />}
+          {active === 'app-logs' && <AppLogsPanel />}
+          {active === 'user-logs' && <AuditLogsPanel />}
+          {active === 'database' && <DatabasePanel />}
+          {active === 'project' && <ProjectPanel />}
+        </SectionErrorBoundary>
       </AppShell.Main>
     </AppShell>
   )
@@ -395,7 +499,11 @@ function AppLogsPanel() {
 
   const clearLogs = useMutation({
     mutationFn: () => fetch('/api/admin/logs/app', { method: 'DELETE', credentials: 'include' }).then((r) => r.json()),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'logs', 'app'] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin', 'logs', 'app'] })
+      notifySuccess({ message: 'App log dikosongkan.' })
+    },
+    onError: (err) => notifyError(err),
   })
 
   const logs = data?.logs ?? []
@@ -463,18 +571,18 @@ function AppLogsPanel() {
               {isLoading && (
                 <Table.Tr>
                   <Table.Td colSpan={4}>
-                    <Text ta="center" c="dimmed" py="md">
-                      Loading...
-                    </Text>
+                    <EmptyRow icon={TbFileText} title="Memuat log…" />
                   </Table.Td>
                 </Table.Tr>
               )}
               {logs.length === 0 && !isLoading && (
                 <Table.Tr>
                   <Table.Td colSpan={4}>
-                    <Text ta="center" c="dimmed" py="md">
-                      Belum ada log
-                    </Text>
+                    <EmptyRow
+                      icon={TbFileText}
+                      title="Belum ada log"
+                      message="Log akan muncul saat ada request/error. Logs tersimpan di Redis dengan retensi 500 entry."
+                    />
                   </Table.Td>
                 </Table.Tr>
               )}

@@ -4,6 +4,7 @@ import {
   Card,
   Container,
   Group,
+  Pagination,
   Progress,
   Select,
   SimpleGrid,
@@ -17,7 +18,7 @@ import {
 } from '@mantine/core'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   TbAlertTriangle,
   TbCheck,
@@ -28,7 +29,10 @@ import {
   TbTarget,
   TbUsers,
 } from 'react-icons/tb'
+import { EmptyRow } from '@/frontend/components/shared/EmptyState'
 import type { ProjectListItem, ProjectPriority, ProjectStatus } from '../ProjectsPanel'
+
+const PAGE_SIZE = 25
 
 const STATUS_COLOR: Record<ProjectStatus, string> = {
   DRAFT: 'gray',
@@ -63,6 +67,7 @@ export function ProjectsOverviewPanel() {
   const [ownerFilter, setOwnerFilter] = useState<string | null>(null)
   const [healthFilter, setHealthFilter] = useState<'all' | 'overdue' | 'extended'>('all')
   const [search, setSearch] = useState('')
+  const [page, setPage] = useState(1)
 
   const { data, isLoading, refetch, isFetching } = useQuery({
     queryKey: ['admin', 'projects-overview'],
@@ -99,6 +104,14 @@ export function ProjectsOverviewPanel() {
       return true
     })
   }, [projects, statusFilter, priorityFilter, ownerFilter, healthFilter, search])
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
+  const safePage = Math.min(page, totalPages)
+  const pagedFiltered = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset page when filters change
+  useEffect(() => {
+    setPage(1)
+  }, [statusFilter, priorityFilter, ownerFilter, healthFilter, search])
 
   const stats = useMemo(() => {
     const total = projects.length
@@ -211,22 +224,22 @@ export function ProjectsOverviewPanel() {
               {isLoading && (
                 <Table.Tr>
                   <Table.Td colSpan={9}>
-                    <Text ta="center" c="dimmed" py="md">
-                      Loading...
-                    </Text>
+                    <EmptyRow icon={TbTarget} title="Memuat project…" />
                   </Table.Td>
                 </Table.Tr>
               )}
               {!isLoading && filtered.length === 0 && (
                 <Table.Tr>
                   <Table.Td colSpan={9}>
-                    <Text ta="center" c="dimmed" py="md">
-                      Tidak ada project yang cocok.
-                    </Text>
+                    <EmptyRow
+                      icon={TbSearch}
+                      title="Tidak ada project yang cocok"
+                      message="Coba ubah filter status/prioritas atau reset pencarian."
+                    />
                   </Table.Td>
                 </Table.Tr>
               )}
-              {filtered.map((p) => {
+              {pagedFiltered.map((p) => {
                 const overdue = isOverdue(p)
                 const taskTotal = p.taskStats?.total ?? 0
                 const taskDone = p.taskStats?.closed ?? 0
@@ -321,6 +334,15 @@ export function ProjectsOverviewPanel() {
               })}
             </Table.Tbody>
           </Table>
+          {filtered.length > PAGE_SIZE && (
+            <Group justify="space-between" p="md">
+              <Text size="xs" c="dimmed">
+                {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, filtered.length)} dari{' '}
+                {filtered.length}
+              </Text>
+              <Pagination value={safePage} onChange={setPage} total={totalPages} size="sm" />
+            </Group>
+          )}
         </Card>
       </Stack>
     </Container>

@@ -21,7 +21,7 @@ import {
 interface ProjectOption {
   id: string
   name: string
-  myRole: 'OWNER' | 'PM' | 'MEMBER' | 'VIEWER'
+  myRole: 'OWNER' | 'PM' | 'MEMBER' | 'VIEWER' | null
   _count?: { tasks?: number }
 }
 
@@ -159,9 +159,9 @@ export function CommandPalette() {
     const projectActions: SpotlightActionData[] = projects.map((p) => ({
       id: `project-${p.id}`,
       label: p.name,
-      description: `Project · ${p.myRole}`,
+      description: p.myRole ? `Project · ${p.myRole}` : 'Project',
       leftSection: <TbTarget size={16} />,
-      keywords: ['project', p.name.toLowerCase(), p.myRole.toLowerCase()],
+      keywords: ['project', p.name.toLowerCase(), ...(p.myRole ? [p.myRole.toLowerCase()] : [])],
       onClick: () => navigate({ to: '/pm', search: { tab: 'tasks', projectId: p.id } }),
     }))
 

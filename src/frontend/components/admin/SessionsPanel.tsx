@@ -4,6 +4,7 @@ import {
   Card,
   Container,
   Group,
+  Pagination,
   SegmentedControl,
   SimpleGrid,
   Stack,
@@ -15,8 +16,11 @@ import {
   Tooltip,
 } from '@mantine/core'
 import { useQuery } from '@tanstack/react-query'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { TbActivity, TbClock, TbDevices, TbRefresh, TbSearch, type TbUsers, TbWifi } from 'react-icons/tb'
+import { EmptyRow } from '@/frontend/components/shared/EmptyState'
+
+const PAGE_SIZE = 25
 
 interface SessionRow {
   id: string
@@ -77,6 +81,7 @@ export function SessionsPanel() {
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [roleFilter, setRoleFilter] = useState<string | null>(null)
+  const [page, setPage] = useState(1)
 
   const { data, isLoading, refetch, isFetching } = useQuery({
     queryKey: ['admin', 'sessions'],
@@ -108,6 +113,14 @@ export function SessionsPanel() {
     for (const s of sessions) set.add(s.userRole)
     return Array.from(set).sort()
   }, [sessions])
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
+  const safePage = Math.min(page, totalPages)
+  const pagedFiltered = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset page when filters change
+  useEffect(() => {
+    setPage(1)
+  }, [search, statusFilter, roleFilter])
 
   return (
     <Container size="xl" px={0}>
@@ -201,22 +214,22 @@ export function SessionsPanel() {
               {isLoading && (
                 <Table.Tr>
                   <Table.Td colSpan={5}>
-                    <Text ta="center" c="dimmed" py="md">
-                      Loading...
-                    </Text>
+                    <EmptyRow icon={TbDevices} title="Memuat session…" />
                   </Table.Td>
                 </Table.Tr>
               )}
               {!isLoading && filtered.length === 0 && (
                 <Table.Tr>
                   <Table.Td colSpan={5}>
-                    <Text ta="center" c="dimmed" py="md">
-                      Tidak ada session yang cocok.
-                    </Text>
+                    <EmptyRow
+                      icon={TbSearch}
+                      title="Tidak ada session yang cocok"
+                      message="Coba ubah filter atau reset pencarian."
+                    />
                   </Table.Td>
                 </Table.Tr>
               )}
-              {filtered.map((s) => (
+              {pagedFiltered.map((s) => (
                 <Table.Tr key={s.id} opacity={s.isExpired ? 0.5 : 1}>
                   <Table.Td>
                     <Stack gap={2}>
@@ -273,6 +286,15 @@ export function SessionsPanel() {
               ))}
             </Table.Tbody>
           </Table>
+          {filtered.length > PAGE_SIZE && (
+            <Group justify="space-between" p="md">
+              <Text size="xs" c="dimmed">
+                {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, filtered.length)} dari{' '}
+                {filtered.length}
+              </Text>
+              <Pagination value={safePage} onChange={setPage} total={totalPages} size="sm" />
+            </Group>
+          )}
         </Card>
       </Stack>
     </Container>

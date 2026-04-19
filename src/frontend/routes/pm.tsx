@@ -82,11 +82,11 @@ export const Route = createFileRoute('/pm')({
 type NavItem = { label: string; icon: typeof TbLayoutDashboard; key: TabKey; badge?: string }
 
 const navItems: NavItem[] = [
-  { label: 'Overview', icon: TbLayoutDashboard, key: 'overview' },
-  { label: 'Projects', icon: TbTarget, key: 'projects' },
-  { label: 'Tasks', icon: TbListCheck, key: 'tasks' },
-  { label: 'Activity', icon: TbActivity, key: 'activity', badge: 'AW' },
-  { label: 'Team', icon: TbUsers, key: 'team' },
+  { label: 'Ringkasan', icon: TbLayoutDashboard, key: 'overview' },
+  { label: 'Proyek', icon: TbTarget, key: 'projects' },
+  { label: 'Task', icon: TbListCheck, key: 'tasks' },
+  { label: 'Aktivitas', icon: TbActivity, key: 'activity', badge: 'AW' },
+  { label: 'Tim', icon: TbUsers, key: 'team' },
 ]
 
 function PmPage() {
@@ -127,9 +127,9 @@ function PmPage() {
   }
   const confirmLogout = () =>
     modals.openConfirmModal({
-      title: 'Logout',
-      children: <Text size="sm">Are you sure you want to logout?</Text>,
-      labels: { confirm: 'Logout', cancel: 'Cancel' },
+      title: 'Keluar',
+      children: <Text size="sm">Yakin ingin keluar dari sesi ini?</Text>,
+      labels: { confirm: 'Keluar', cancel: 'Batal' },
       confirmProps: { color: 'red' },
       onConfirm: () => logout.mutate(),
     })
@@ -146,6 +146,10 @@ function PmPage() {
         collapsed: { mobile: !mobileOpened },
       }}
       padding="md"
+      styles={{
+        navbar: { backgroundColor: 'var(--app-navbar-bg)' },
+        header: { backgroundColor: 'var(--app-navbar-bg)' },
+      }}
     >
       <AppShell.Header>
         <Group h="100%" px="md" justify="space-between">
@@ -154,7 +158,7 @@ function PmPage() {
             <ThemeIcon variant="light" color="blue" size="md">
               <TbTarget size={18} />
             </ThemeIcon>
-            <Title order={4}>Project Manager</Title>
+            <Title order={4}>Manajer Proyek</Title>
           </Group>
           <Group gap="xs">
             <NotificationBell size="md" />
@@ -198,6 +202,7 @@ function PmPage() {
                     </Badge>
                   ) : null
                 }
+                color="blue"
                 active={active === item.key}
                 onClick={() => setActive(item.key)}
               />
@@ -224,7 +229,7 @@ function PmPage() {
                 onClick={() => navigate({ to: '/settings' })}
                 size="sm"
               >
-                Settings
+                Pengaturan
               </Button>
               <Group justify="space-between">
                 <ThemeToggle size="sm" />
@@ -240,7 +245,7 @@ function PmPage() {
                 loading={logout.isPending}
                 size="sm"
               >
-                Logout
+                Keluar
               </Button>
             </>
           ) : (
@@ -256,18 +261,18 @@ function PmPage() {
                   </ActionIcon>
                 </Tooltip>
               )}
-              <Tooltip label="Settings" position="right" withArrow>
+              <Tooltip label="Pengaturan" position="right" withArrow>
                 <ActionIcon variant="subtle" size="lg" onClick={() => navigate({ to: '/settings' })}>
                   <TbUser size={18} />
                 </ActionIcon>
               </Tooltip>
               <ThemeToggle size="sm" />
-              <Tooltip label="Expand sidebar" position="right" withArrow>
+              <Tooltip label="Perluas sidebar" position="right" withArrow>
                 <ActionIcon variant="subtle" onClick={toggleSidebar} size="lg">
                   <TbLayoutSidebarLeftExpand size={18} />
                 </ActionIcon>
               </Tooltip>
-              <Tooltip label="Logout" position="right" withArrow>
+              <Tooltip label="Keluar" position="right" withArrow>
                 <ActionIcon variant="light" color="red" size="lg" onClick={confirmLogout} loading={logout.isPending}>
                   <TbLogout size={18} />
                 </ActionIcon>
@@ -355,34 +360,34 @@ function OverviewPanel({
   return (
     <Stack gap="lg">
       <div>
-        <Title order={2}>Welcome back, {userName.split(' ')[0]}</Title>
+        <Title order={2}>Halo, {userName.split(' ')[0]}</Title>
         <Text c="dimmed" size="sm">
-          Your project overview. Start a project, track tasks, and watch the pipeline move.
+          Ringkasan proyek kamu. Mulai proyek, pantau task, dan lihat pipeline bergerak.
         </Text>
       </div>
 
       <SimpleGrid cols={{ base: 1, sm: 2, md: 4 }} spacing="md">
-        <StatCard label="Active Projects" value={String(activeProjects.length)} icon={TbTarget} color="blue" />
-        <StatCard label="Open Tasks" value={String(openTasks.length)} icon={TbListCheck} color="orange" />
-        <StatCard label="Open Bugs" value={String(openBugs)} icon={TbBug} color="red" />
-        <StatCard label="Assigned to Me" value={String(myTasksCount)} icon={TbActivity} color="grape" />
+        <StatCard label="Proyek Aktif" value={String(activeProjects.length)} icon={TbTarget} color="blue" />
+        <StatCard label="Task Terbuka" value={String(openTasks.length)} icon={TbListCheck} color="orange" />
+        <StatCard label="Bug Terbuka" value={String(openBugs)} icon={TbBug} color="red" />
+        <StatCard label="Ditugaskan ke Saya" value={String(myTasksCount)} icon={TbActivity} color="grape" />
       </SimpleGrid>
 
       <Paper withBorder p="lg" radius="md">
         <Group justify="space-between" mb="md">
-          <Title order={5}>Your Projects</Title>
+          <Title order={5}>Proyek Kamu</Title>
           <Group gap="xs">
             <Button variant="subtle" size="xs" onClick={onGoToTasks}>
-              View tasks
+              Lihat task
             </Button>
             <Button leftSection={<TbPlus size={14} />} size="xs" onClick={onGoToProjects}>
-              Manage
+              Kelola
             </Button>
           </Group>
         </Group>
         {activeProjects.length === 0 ? (
           <Text size="sm" c="dimmed" ta="center" py="xl">
-            No active projects yet. Create one from the Projects tab.
+            Belum ada proyek aktif. Buat satu dari tab Proyek.
           </Text>
         ) : (
           <Stack gap="xs">
@@ -397,7 +402,7 @@ function OverviewPanel({
               >
                 <Text size="sm">{(p as { name?: string }).name ?? p.id.slice(0, 8)}</Text>
                 <Badge size="xs" variant="light">
-                  {p._count.tasks} tasks
+                  {p._count.tasks} task
                 </Badge>
               </Group>
             ))}

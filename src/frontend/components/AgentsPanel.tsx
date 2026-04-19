@@ -12,6 +12,7 @@ import {
   Indicator,
   List,
   Menu,
+  Pagination,
   Paper,
   SegmentedControl,
   Select,
@@ -24,7 +25,7 @@ import {
 } from '@mantine/core'
 import { modals } from '@mantine/modals'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   TbActivity,
   TbAlertTriangle,
@@ -39,6 +40,11 @@ import {
   TbShieldOff,
   TbUserCheck,
 } from 'react-icons/tb'
+import { EmptyState } from '@/frontend/components/shared/EmptyState'
+import { LoadingBlock } from '@/frontend/components/shared/LoadingState'
+import { notifyError, notifySuccess } from '@/frontend/lib/notify'
+
+const PAGE_SIZE = 25
 
 type AgentStatus = 'PENDING' | 'APPROVED' | 'REVOKED'
 type Filter = 'all' | AgentStatus
@@ -121,6 +127,7 @@ export function AgentsPanel() {
   const queryClient = useQueryClient()
   const [statusFilter, setStatusFilter] = useState<Filter>('all')
   const [groupMode, setGroupMode] = useState<GroupMode>('flat')
+  const [page, setPage] = useState(1)
 
   const {
     data: list,
@@ -145,16 +152,31 @@ export function AgentsPanel() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId }),
       }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'agents'] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin', 'agents'] })
+      notifySuccess({ message: 'Agent disetujui.' })
+    },
+    onError: (err) => notifyError(err),
   })
 
   const revoke = useMutation({
     mutationFn: (id: string) => api(`/api/admin/agents/${id}/revoke`, { method: 'POST' }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'agents'] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin', 'agents'] })
+      notifySuccess({ message: 'Agent di-revoke. Event baru akan ditolak.' })
+    },
+    onError: (err) => notifyError(err),
   })
 
   const allAgents = list?.agents ?? []
   const agents = allAgents.filter((a) => (statusFilter === 'all' ? true : a.status === statusFilter))
+  const totalPages = Math.max(1, Math.ceil(agents.length / PAGE_SIZE))
+  const safePage = Math.min(page, totalPages)
+  const pagedAgents = agents.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset page when filter changes
+  useEffect(() => {
+    setPage(1)
+  }, [statusFilter, groupMode])
 
   const groups = useMemo(() => {
     if (groupMode !== 'user') return []
@@ -389,36 +411,27 @@ export function AgentsPanel() {
       )}
 
       {isLoading ? (
-        <Card withBorder padding="xl" radius="md">
-          <Text ta="center" c="dimmed">
-            Loading agents…
-          </Text>
-        </Card>
+        <LoadingBlock message="Memuat daftar agent…" />
       ) : agents.length === 0 ? (
-        <Card withBorder padding="xl" radius="md">
-          <Stack align="center" gap={4}>
-            <TbDeviceDesktop size={28} style={{ opacity: 0.4 }} />
-            {statusFilter === 'all' ? (
+        statusFilter === 'all' ? (
+          <EmptyState
+            icon={TbDeviceDesktop}
+            color="blue"
+            title="Belum ada agent terdaftar"
+            message={
               <>
-                <Text size="sm" c="dimmed">
-                  Belum ada agent terdaftar.
-                </Text>
-                <Text size="xs" c="dimmed">
-                  Install <Code>pmw</Code> di Mac, jalankan <Code>pmw init</Code>, lalu agent akan muncul di sini
-                  sebagai{' '}
-                  <Badge color="yellow" size="xs" variant="light">
-                    PENDING
-                  </Badge>
-                  .
-                </Text>
+                Install <Code>pmw</Code> di Mac, jalankan <Code>pmw init</Code>, lalu agent akan muncul di sini sebagai
+                PENDING untuk kamu approve.
               </>
-            ) : (
-              <Text size="sm" c="dimmed">
-                Tidak ada agent berstatus {statusFilter.toLowerCase()}.
-              </Text>
-            )}
-          </Stack>
-        </Card>
+            }
+          />
+        ) : (
+          <EmptyState
+            icon={TbDeviceDesktop}
+            title="Tidak ada agent"
+            message={`Tidak ada agent berstatus ${statusFilter.toLowerCase()} saat ini.`}
+          />
+        )
       ) : groupMode === 'user' ? (
         <Stack gap="md">
           {groups.map((g) => (
@@ -493,11 +506,19 @@ export function AgentsPanel() {
               </Table.Tr>
             </Table.Thead>
             <Table.Tbody>
-              {agents.map((a) => (
+              {pagedAgents.map((a) => (
                 <AgentRowTr key={a.id} agent={a} showAssignee onApprove={openApprove} onRevoke={openRevoke} />
               ))}
             </Table.Tbody>
           </Table>
+          {agents.length > PAGE_SIZE && (
+            <Group justify="space-between" p="md">
+              <Text size="xs" c="dimmed">
+                {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, agents.length)} dari {agents.length}
+              </Text>
+              <Pagination value={safePage} onChange={setPage} total={totalPages} size="sm" />
+            </Group>
+          )}
         </Card>
       )}
     </Stack>
