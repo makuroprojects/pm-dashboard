@@ -4412,7 +4412,7 @@ export function createApp() {
           set.status = 401
           return { error: 'Unauthorized' }
         }
-        if (auth.role !== 'SUPER_ADMIN') {
+        if (!isSystemAdmin(auth.role)) {
           set.status = 403
           return { error: 'Forbidden' }
         }

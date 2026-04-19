@@ -4,12 +4,9 @@ import {
   Badge,
   Burger,
   Button,
-  Card,
   Container,
   Group,
   NavLink,
-  Paper,
-  SimpleGrid,
   Stack,
   Text,
   ThemeIcon,
@@ -21,8 +18,6 @@ import { modals } from '@mantine/modals'
 import { createFileRoute, redirect, useNavigate } from '@tanstack/react-router'
 import { useState } from 'react'
 import {
-  TbActivity,
-  TbBug,
   TbClipboardList,
   TbCode,
   TbLayoutDashboard,
@@ -32,7 +27,6 @@ import {
   TbLogout,
   TbPlugConnected,
   TbReportAnalytics,
-  TbSettings,
   TbShieldLock,
   TbTarget,
   TbUser,
@@ -40,6 +34,7 @@ import {
 } from 'react-icons/tb'
 import { AnalyticsPanel } from '@/frontend/components/admin/AnalyticsPanel'
 import { AuditLogsPanel } from '@/frontend/components/admin/AuditLogsPanel'
+import { OverviewPanel } from '@/frontend/components/admin/OverviewPanel'
 import { ProjectsOverviewPanel } from '@/frontend/components/admin/ProjectsOverviewPanel'
 import { SessionsPanel } from '@/frontend/components/admin/SessionsPanel'
 import { TaskTriagePanel } from '@/frontend/components/admin/TaskTriagePanel'
@@ -270,7 +265,7 @@ function AdminPage() {
 
       <AppShell.Main>
         <Container size="xl" px={0}>
-          {active === 'overview' && <AdminOverview />}
+          {active === 'overview' && <OverviewPanel />}
           {active === 'users' && <UsersPanel />}
           {active === 'audit-logs' && <AuditLogsPanel />}
           {active === 'projects' && <ProjectsOverviewPanel />}
@@ -280,68 +275,5 @@ function AdminPage() {
         </Container>
       </AppShell.Main>
     </AppShell>
-  )
-}
-
-function AdminOverview() {
-  return (
-    <Stack gap="lg">
-      <div>
-        <Title order={2}>Admin Overview</Title>
-        <Text c="dimmed" size="sm">
-          System-wide summary. Dive into users and analytics from the sidebar.
-        </Text>
-      </div>
-
-      <SimpleGrid cols={{ base: 1, sm: 2, md: 4 }} spacing="md">
-        <StatCard label="Total Users" value="—" icon={TbUsers} color="violet" />
-        <StatCard label="Open Tasks" value="—" icon={TbBug} color="red" />
-        <StatCard label="Live Agents" value="—" icon={TbActivity} color="teal" />
-        <StatCard label="Projects" value="—" icon={TbTarget} color="blue" />
-      </SimpleGrid>
-
-      <Paper withBorder p="lg" radius="md">
-        <Stack gap="sm">
-          <Group gap="xs">
-            <TbSettings size={16} />
-            <Title order={5}>Phase 2 preview</Title>
-          </Group>
-          <Text size="sm" c="dimmed">
-            This screen will bring together user management, task triage, and cross-project metrics. Role-based sections
-            will replace the Dev Console's admin duties.
-          </Text>
-        </Stack>
-      </Paper>
-    </Stack>
-  )
-}
-
-function StatCard({
-  label,
-  value,
-  icon: Icon,
-  color,
-}: {
-  label: string
-  value: string
-  icon: typeof TbLayoutDashboard
-  color: string
-}) {
-  return (
-    <Card withBorder padding="lg" radius="md">
-      <Group justify="space-between" align="flex-start">
-        <div>
-          <Text size="xs" c="dimmed" fw={500} tt="uppercase">
-            {label}
-          </Text>
-          <Text fw={700} size="xl">
-            {value}
-          </Text>
-        </div>
-        <ThemeIcon variant="light" color={color} size="lg" radius="md">
-          <Icon size={20} />
-        </ThemeIcon>
-      </Group>
-    </Card>
   )
 }
