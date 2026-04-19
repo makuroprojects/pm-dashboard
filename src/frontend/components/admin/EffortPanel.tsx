@@ -3,7 +3,6 @@ import {
   Alert,
   Badge,
   Card,
-  Container,
   Group,
   Pagination,
   SegmentedControl,
@@ -18,6 +17,16 @@ import {
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { TbAlertTriangle, TbChartBar, TbClock, TbRefresh, TbUserExclamation } from 'react-icons/tb'
+import { InfoTip } from '@/frontend/components/shared/InfoTip'
+
+const VIEW_TIPS: Record<View, string> = {
+  variance:
+    'Variance = perbandingan estimasi jam vs actual jam (dihitung dari durasi ActivityWatch window events saat task aktif). Positif = over budget, negatif = under.',
+  ghost:
+    'Ghost tasks = task IN_PROGRESS yang tidak berubah ≥3 hari. Sinyal tugas stuck, forgotten, atau abandoned oleh assignee.',
+  phantom:
+    'Phantom work = jam aktivitas pm-watch yang tidak tercakup oleh window task manapun. Indikasi scope creep atau pekerjaan yang tidak punya ticket.',
+}
 
 const PAGE_SIZE = 25
 
@@ -81,15 +90,21 @@ export function EffortPanel() {
   const [view, setView] = useState<View>('variance')
 
   return (
-    <Container size="xl" px={0}>
-      <Stack gap="lg">
-        <Group justify="space-between" align="flex-start">
-          <div>
+    <Stack gap="lg">
+      <Group justify="space-between" align="flex-start">
+        <div>
+          <Group gap="xs">
             <Title order={3}>Effort Tracking</Title>
-            <Text size="sm" c="dimmed">
-              Evidence-based from pm-watch activity events. Estimate vs actual, stalled tasks, untracked work.
-            </Text>
-          </div>
+            <InfoTip
+              width={360}
+              label="Sumber data: ActivityWatch window-bucket events dari agent pm-watch, dikorelasikan dengan window aktif tiap task (startsAt → closedAt). Menjawab: estimasi akurat tidak, ada task stuck, ada jam yang tidak tercatat di task."
+            />
+          </Group>
+          <Text size="sm" c="dimmed">
+            Evidence-based from pm-watch activity events. Estimate vs actual, stalled tasks, untracked work.
+          </Text>
+        </div>
+        <Group gap="xs">
           <SegmentedControl
             value={view}
             onChange={(v) => setView(v as View)}
@@ -99,13 +114,14 @@ export function EffortPanel() {
               { label: 'Phantom work', value: 'phantom' },
             ]}
           />
+          <InfoTip width={340} label={VIEW_TIPS[view]} />
         </Group>
+      </Group>
 
-        {view === 'variance' && <VarianceView />}
-        {view === 'ghost' && <GhostView />}
-        {view === 'phantom' && <PhantomView />}
-      </Stack>
-    </Container>
+      {view === 'variance' && <VarianceView />}
+      {view === 'ghost' && <GhostView />}
+      {view === 'phantom' && <PhantomView />}
+    </Stack>
   )
 }
 
@@ -134,16 +150,52 @@ function VarianceView() {
   return (
     <Stack gap="md">
       <SimpleGrid cols={{ base: 2, md: 5 }} spacing="sm">
-        <StatCard icon={<TbAlertTriangle />} label="Over budget" value={counts.over} color="red" />
-        <StatCard icon={<TbClock />} label="Under budget" value={counts.under} color="teal" />
-        <StatCard icon={<TbChartBar />} label="On track" value={counts.onTrack} color="blue" />
-        <StatCard icon={<TbClock />} label="Missing estimate" value={counts.noEstimate} color="gray" />
-        <StatCard icon={<TbClock />} label="No activity" value={counts.noActivity} color="yellow" />
+        <StatCard
+          icon={<TbAlertTriangle />}
+          label="Over budget"
+          value={counts.over}
+          color="red"
+          tip="Actual > estimate ≥25%. Task menghabiskan jam lebih banyak dari yang direncanakan — review kompleksitas atau scope creep."
+        />
+        <StatCard
+          icon={<TbClock />}
+          label="Under budget"
+          value={counts.under}
+          color="teal"
+          tip="Actual < estimate ≥25%. Task selesai lebih cepat dari estimasi — tim efisien, atau estimasi terlalu konservatif."
+        />
+        <StatCard
+          icon={<TbChartBar />}
+          label="On track"
+          value={counts.onTrack}
+          color="blue"
+          tip="Selisih actual vs estimate berada dalam ±25%. Estimasi akurat."
+        />
+        <StatCard
+          icon={<TbClock />}
+          label="Missing estimate"
+          value={counts.noEstimate}
+          color="gray"
+          tip="Task tidak punya estimateHours, jadi variance tidak bisa dihitung. Minta PM isi estimasi saat task dibuat."
+        />
+        <StatCard
+          icon={<TbClock />}
+          label="No activity"
+          value={counts.noActivity}
+          color="yellow"
+          tip="Task tidak punya event ActivityWatch di window-nya. Tidak ada bukti pekerjaan — mungkin belum dimulai, tidak di-track, atau assignee belum pakai pm-watch."
+        />
       </SimpleGrid>
 
       <Card withBorder padding={0} radius="md">
         <Group p="md" justify="space-between">
-          <Title order={5}>Tasks</Title>
+          <Group gap="xs">
+            <Title order={5}>Tasks</Title>
+            <InfoTip
+              width={340}
+              label="Semua task (OPEN/IN_PROGRESS/READY_FOR_QC/CLOSED) dengan data variance. Kolom Actual adalah jam ActivityWatch yang jatuh di window startsAt → closedAt (atau sekarang jika belum closed)."
+            />
+          </Group>
           <Tooltip label="Refresh">
             <ActionIcon variant="subtle" onClick={() => refetch()} loading={isFetching}>
               <TbRefresh size={16} />
@@ -157,10 +209,26 @@ function VarianceView() {
               <Table.Th>Project</Table.Th>
               <Table.Th>Assignee</Table.Th>
               <Table.Th>Priority</Table.Th>
-              <Table.Th>Estimate</Table.Th>
-              <Table.Th>Actual</Table.Th>
-              <Table.Th>Variance</Table.Th>
-              <Table.Th>Verdict</Table.Th>
+              <Table.Th>
+                <Tooltip label="Estimasi jam dari field estimateHours. Diisi saat task dibuat.">
+                  <span style={{ cursor: 'help', textDecoration: 'underline dotted' }}>Estimate</span>
+                </Tooltip>
+              </Table.Th>
+              <Table.Th>
+                <Tooltip label="Jumlah jam ActivityWatch window events assignee yang jatuh di window task aktif.">
+                  <span style={{ cursor: 'help', textDecoration: 'underline dotted' }}>Actual</span>
+                </Tooltip>
+              </Table.Th>
+              <Table.Th>
+                <Tooltip label="(Actual − Estimate) / Estimate × 100. Positif = over budget, negatif = under. Rentang ±25% = on track.">
+                  <span style={{ cursor: 'help', textDecoration: 'underline dotted' }}>Variance</span>
+                </Tooltip>
+              </Table.Th>
+              <Table.Th>
+                <Tooltip label="Kategori: over / under / on / missing-estimate (tidak ada estimateHours) / no-activity (tidak ada event pm-watch) / no-assignee.">
+                  <span style={{ cursor: 'help', textDecoration: 'underline dotted' }}>Verdict</span>
+                </Tooltip>
+              </Table.Th>
             </Table.Tr>
           </Table.Thead>
           <Table.Tbody>
@@ -285,7 +353,13 @@ function GhostView() {
       )}
       <Card withBorder padding={0} radius="md">
         <Group p="md" justify="space-between">
-          <Title order={5}>Ghost tasks</Title>
+          <Group gap="xs">
+            <Title order={5}>Ghost tasks</Title>
+            <InfoTip
+              width={340}
+              label="Task status IN_PROGRESS dengan updatedAt ≥3 hari lalu. Diperiksa apakah assignee masih aktif (agent pm-watch online 24j terakhir) untuk bedakan stalled (aktif tapi stuck) vs abandoned (tidak aktif)."
+            />
+          </Group>
           <Tooltip label="Refresh">
             <ActionIcon variant="subtle" onClick={() => refetch()} loading={isFetching}>
               <TbRefresh size={16} />
@@ -298,9 +372,21 @@ function GhostView() {
               <Table.Th>Task</Table.Th>
               <Table.Th>Project</Table.Th>
               <Table.Th>Assignee</Table.Th>
-              <Table.Th>Stale</Table.Th>
-              <Table.Th>Hours 7d</Table.Th>
-              <Table.Th>Signal</Table.Th>
+              <Table.Th>
+                <Tooltip label="Berapa hari sejak task terakhir diupdate (updatedAt).">
+                  <span style={{ cursor: 'help', textDecoration: 'underline dotted' }}>Stale</span>
+                </Tooltip>
+              </Table.Th>
+              <Table.Th>
+                <Tooltip label="Jam ActivityWatch events dari agent assignee pada task ini dalam 7 hari terakhir. 0 = benar-benar tidak disentuh.">
+                  <span style={{ cursor: 'help', textDecoration: 'underline dotted' }}>Hours 7d</span>
+                </Tooltip>
+              </Table.Th>
+              <Table.Th>
+                <Tooltip label="Stalled: assignee online tapi task stuck. Abandoned: assignee offline >24 jam, kemungkinan diabaikan.">
+                  <span style={{ cursor: 'help', textDecoration: 'underline dotted' }}>Signal</span>
+                </Tooltip>
+              </Table.Th>
             </Table.Tr>
           </Table.Thead>
           <Table.Tbody>
@@ -408,7 +494,13 @@ function PhantomView() {
       )}
       <Card withBorder padding={0} radius="md">
         <Group p="md" justify="space-between">
-          <Title order={5}>Untracked activity per user (last 7d)</Title>
+          <Group gap="xs">
+            <Title order={5}>Untracked activity per user (last 7d)</Title>
+            <InfoTip
+              width={340}
+              label="Per user: Total = seluruh jam ActivityWatch 7 hari; Tracked = jam yang masuk window task aktif/recent-closed; Phantom = sisanya (Total − Tracked). >50% phantom = banyak kerja tanpa ticket."
+            />
+          </Group>
           <Tooltip label="Refresh">
             <ActionIcon variant="subtle" onClick={() => refetch()} loading={isFetching}>
               <TbRefresh size={16} />
@@ -419,10 +511,26 @@ function PhantomView() {
           <Table.Thead>
             <Table.Tr>
               <Table.Th>User</Table.Th>
-              <Table.Th>Total</Table.Th>
-              <Table.Th>Tracked</Table.Th>
-              <Table.Th>Phantom</Table.Th>
-              <Table.Th>% Phantom</Table.Th>
+              <Table.Th>
+                <Tooltip label="Seluruh jam ActivityWatch window-events dari agent user dalam 7 hari terakhir.">
+                  <span style={{ cursor: 'help', textDecoration: 'underline dotted' }}>Total</span>
+                </Tooltip>
+              </Table.Th>
+              <Table.Th>
+                <Tooltip label="Jam yang jatuh di window salah satu task user (IN_PROGRESS atau baru closed).">
+                  <span style={{ cursor: 'help', textDecoration: 'underline dotted' }}>Tracked</span>
+                </Tooltip>
+              </Table.Th>
+              <Table.Th>
+                <Tooltip label="Total − Tracked. Jam kerja yang tidak punya task terkait.">
+                  <span style={{ cursor: 'help', textDecoration: 'underline dotted' }}>Phantom</span>
+                </Tooltip>
+              </Table.Th>
+              <Table.Th>
+                <Tooltip label="Phantom / Total × 100. >50% = peringatan, banyak pekerjaan tidak tercatat.">
+                  <span style={{ cursor: 'help', textDecoration: 'underline dotted' }}>% Phantom</span>
+                </Tooltip>
+              </Table.Th>
               <Table.Th>Open tasks</Table.Th>
             </Table.Tr>
           </Table.Thead>
@@ -509,11 +617,13 @@ function StatCard({
   label,
   value,
   color,
+  tip,
 }: {
   icon: React.ReactNode
   label: string
   value: number
   color: string
+  tip?: string
 }) {
   return (
     <Card withBorder padding="sm" radius="md">
@@ -521,10 +631,13 @@ function StatCard({
         <ThemeIcon variant="light" color={color} size="md">
           {icon}
         </ThemeIcon>
-        <div>
-          <Text size="xs" c="dimmed" tt="uppercase" fw={500}>
-            {label}
-          </Text>
+        <div style={{ flex: 1 }}>
+          <Group gap={4} wrap="nowrap">
+            <Text size="xs" c="dimmed" tt="uppercase" fw={500}>
+              {label}
+            </Text>
+            {tip && <InfoTip label={tip} size={12} />}
+          </Group>
           <Text fw={700} size="lg">
             {value}
           </Text>

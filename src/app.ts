@@ -58,6 +58,50 @@ function sessionCookie(value: string, maxAgeSec: number): string {
   return `session=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSec}${secure}`
 }
 
+type PMTab = 'overview' | 'projects' | 'tasks' | 'activity' | 'team'
+type TaskDefaultFilter = 'mine' | 'all' | 'priority'
+type UserPreferences = {
+  notifyTaskAssigned: boolean
+  notifyTaskStatusChanged: boolean
+  notifyMentioned: boolean
+  notifyProjectDeadline: boolean
+  pmDefaultTab: PMTab
+  tasksDefaultFilter: TaskDefaultFilter
+  tableDensity: 'compact' | 'comfortable'
+}
+
+function defaultPreferences(): UserPreferences {
+  return {
+    notifyTaskAssigned: true,
+    notifyTaskStatusChanged: true,
+    notifyMentioned: true,
+    notifyProjectDeadline: true,
+    pmDefaultTab: 'overview',
+    tasksDefaultFilter: 'mine',
+    tableDensity: 'comfortable',
+  }
+}
+
+function sanitizePreferences(input: Record<string, unknown>): UserPreferences {
+  const base = defaultPreferences()
+  const pmTabs: PMTab[] = ['overview', 'projects', 'tasks', 'activity', 'team']
+  const filters: TaskDefaultFilter[] = ['mine', 'all', 'priority']
+  return {
+    notifyTaskAssigned:
+      typeof input.notifyTaskAssigned === 'boolean' ? input.notifyTaskAssigned : base.notifyTaskAssigned,
+    notifyTaskStatusChanged:
+      typeof input.notifyTaskStatusChanged === 'boolean' ? input.notifyTaskStatusChanged : base.notifyTaskStatusChanged,
+    notifyMentioned: typeof input.notifyMentioned === 'boolean' ? input.notifyMentioned : base.notifyMentioned,
+    notifyProjectDeadline:
+      typeof input.notifyProjectDeadline === 'boolean' ? input.notifyProjectDeadline : base.notifyProjectDeadline,
+    pmDefaultTab: pmTabs.includes(input.pmDefaultTab as PMTab) ? (input.pmDefaultTab as PMTab) : base.pmDefaultTab,
+    tasksDefaultFilter: filters.includes(input.tasksDefaultFilter as TaskDefaultFilter)
+      ? (input.tasksDefaultFilter as TaskDefaultFilter)
+      : base.tasksDefaultFilter,
+    tableDensity: input.tableDensity === 'compact' ? 'compact' : 'comfortable',
+  }
+}
+
 async function requireAuth(request: Request): Promise<{ userId: string; role: string; email: string } | null> {
   const cookie = request.headers.get('cookie') ?? ''
   const token = cookie.match(/session=([^;]+)/)?.[1]
@@ -975,7 +1019,56 @@ export function createApp() {
             path: '/api/me/agents',
             auth: 'authenticated',
             category: 'pm-watch',
-            description: "Current user's own approved pm-watch agents (device list)",
+            description: "Current user's own pm-watch agents (all statuses — include: 'pending' query filter)",
+          },
+          {
+            method: 'GET',
+            path: '/api/me/agents/today',
+            auth: 'authenticated',
+            category: 'pm-watch',
+            description: "Total window-bucket seconds tracked today across the user's agents, grouped per agent",
+          },
+          {
+            method: 'GET',
+            path: '/api/me/preferences',
+            auth: 'authenticated',
+            category: 'user',
+            description: 'Current user preferences (notifications, default PM tab, density)',
+          },
+          {
+            method: 'PUT',
+            path: '/api/me/preferences',
+            auth: 'authenticated',
+            category: 'user',
+            description: 'Update current user preferences — unknown keys ignored, invalid values fall back to defaults',
+          },
+          {
+            method: 'PUT',
+            path: '/api/me/password',
+            auth: 'authenticated',
+            category: 'user',
+            description: 'Change own password (requires currentPassword + newPassword, min 8 chars)',
+          },
+          {
+            method: 'GET',
+            path: '/api/me/sessions',
+            auth: 'authenticated',
+            category: 'user',
+            description: 'List own active sessions with isCurrent flag',
+          },
+          {
+            method: 'DELETE',
+            path: '/api/me/sessions/others',
+            auth: 'authenticated',
+            category: 'user',
+            description: 'Revoke all of own sessions except the current one',
+          },
+          {
+            method: 'GET',
+            path: '/api/me/audit',
+            auth: 'authenticated',
+            category: 'user',
+            description: 'Recent 20 security-related audit events for current user',
           },
           {
             method: 'GET',
@@ -1011,6 +1104,20 @@ export function createApp() {
             auth: 'authenticated',
             category: 'notifications',
             description: 'Delete a notification',
+          },
+          {
+            method: 'GET',
+            path: '/api/me/team',
+            auth: 'authenticated',
+            category: 'team',
+            description: "Teammates across user's projects with open/overdue task counts",
+          },
+          {
+            method: 'GET',
+            path: '/api/me/team-activity',
+            auth: 'authenticated',
+            category: 'team',
+            description: "Recent task activity (status changes + comments) in user's shared projects",
           },
           {
             method: 'GET',
@@ -4628,7 +4735,7 @@ export function createApp() {
           return { error: 'Unauthorized' }
         }
         const agents = await prisma.agent.findMany({
-          where: { claimedById: auth.userId, status: 'APPROVED' },
+          where: { claimedById: auth.userId },
           select: {
             id: true,
             agentId: true,
@@ -4639,9 +4746,158 @@ export function createApp() {
             createdAt: true,
             _count: { select: { events: true } },
           },
-          orderBy: [{ lastSeenAt: { sort: 'desc', nulls: 'last' } }, { createdAt: 'desc' }],
+          orderBy: [{ status: 'asc' }, { lastSeenAt: { sort: 'desc', nulls: 'last' } }, { createdAt: 'desc' }],
         })
         return { agents }
+      })
+
+      .get('/api/me/agents/today', async ({ request, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const agents = await prisma.agent.findMany({
+          where: { claimedById: auth.userId, status: 'APPROVED' },
+          select: { id: true, agentId: true, hostname: true },
+        })
+        if (agents.length === 0) return { totalSeconds: 0, perAgent: [] as { agentId: string; seconds: number }[] }
+        const startOfDay = new Date()
+        startOfDay.setHours(0, 0, 0, 0)
+        const grouped = await prisma.activityEvent.groupBy({
+          by: ['agentId'],
+          where: {
+            agentId: { in: agents.map((a) => a.id) },
+            timestamp: { gte: startOfDay },
+            bucketId: { contains: 'window' },
+          },
+          _sum: { duration: true },
+        })
+        const byAgent = new Map(grouped.map((g) => [g.agentId, g._sum.duration ?? 0] as const))
+        const perAgent = agents.map((a) => ({ agentId: a.id, seconds: Math.round(byAgent.get(a.id) ?? 0) }))
+        const totalSeconds = perAgent.reduce((sum, p) => sum + p.seconds, 0)
+        return { totalSeconds, perAgent }
+      })
+
+      // ─── User preferences ────────
+      .get('/api/me/preferences', async ({ request, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const user = await prisma.user.findUnique({
+          where: { id: auth.userId },
+          select: { preferences: true },
+        })
+        return { preferences: user?.preferences ?? defaultPreferences() }
+      })
+      .put('/api/me/preferences', async ({ request, body, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const incoming = (body ?? {}) as Record<string, unknown>
+        const merged = sanitizePreferences(incoming)
+        await prisma.user.update({
+          where: { id: auth.userId },
+          data: { preferences: merged },
+        })
+        return { preferences: merged }
+      })
+
+      // ─── Security: password + sessions + audit ────────
+      .put('/api/me/password', async ({ request, body, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const { currentPassword, newPassword } = (body ?? {}) as { currentPassword?: string; newPassword?: string }
+        if (!currentPassword || !newPassword) {
+          set.status = 400
+          return { error: 'currentPassword and newPassword required' }
+        }
+        if (newPassword.length < 8) {
+          set.status = 400
+          return { error: 'Password baru minimal 8 karakter' }
+        }
+        const user = await prisma.user.findUnique({ where: { id: auth.userId } })
+        if (!user) {
+          set.status = 404
+          return { error: 'User not found' }
+        }
+        const ok = await Bun.password.verify(currentPassword, user.password)
+        if (!ok) {
+          set.status = 403
+          return { error: 'Password saat ini salah' }
+        }
+        const hashed = await Bun.password.hash(newPassword)
+        await prisma.user.update({ where: { id: auth.userId }, data: { password: hashed } })
+        const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null
+        await prisma.auditLog.create({
+          data: { userId: auth.userId, action: 'PASSWORD_CHANGED', detail: null, ip },
+        })
+        return { ok: true }
+      })
+      .get('/api/me/sessions', async ({ request, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const cookie = request.headers.get('cookie') ?? ''
+        const currentToken = cookie.match(/session=([^;]+)/)?.[1] ?? ''
+        const sessions = await prisma.session.findMany({
+          where: { userId: auth.userId, expiresAt: { gt: new Date() } },
+          orderBy: { createdAt: 'desc' },
+          select: { id: true, token: true, createdAt: true, expiresAt: true },
+        })
+        return {
+          sessions: sessions.map((s) => ({
+            id: s.id,
+            createdAt: s.createdAt,
+            expiresAt: s.expiresAt,
+            isCurrent: s.token === currentToken,
+          })),
+        }
+      })
+      .delete('/api/me/sessions/others', async ({ request, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const cookie = request.headers.get('cookie') ?? ''
+        const currentToken = cookie.match(/session=([^;]+)/)?.[1] ?? ''
+        const result = await prisma.session.deleteMany({
+          where: { userId: auth.userId, token: { not: currentToken } },
+        })
+        const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null
+        await prisma.auditLog.create({
+          data: { userId: auth.userId, action: 'SESSIONS_REVOKED', detail: `revoked ${result.count} session(s)`, ip },
+        })
+        return { revoked: result.count }
+      })
+      .get('/api/me/audit', async ({ request, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const logs = await prisma.auditLog.findMany({
+          where: {
+            userId: auth.userId,
+            action: {
+              in: ['LOGIN', 'LOGOUT', 'LOGIN_FAILED', 'LOGIN_BLOCKED', 'PASSWORD_CHANGED', 'SESSIONS_REVOKED'],
+            },
+          },
+          orderBy: { createdAt: 'desc' },
+          take: 20,
+          select: { id: true, action: true, detail: true, ip: true, createdAt: true },
+        })
+        return { logs }
       })
 
       // ─── Notifications API (authenticated user) ────────
@@ -4723,6 +4979,189 @@ export function createApp() {
         }
         await prisma.notification.delete({ where: { id: params.id } })
         return { ok: true }
+      })
+
+      // ─── Team (user-scoped aggregate across shared projects) ────
+      .get('/api/me/team', async ({ request, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const memberships = await prisma.projectMember.findMany({
+          where: { userId: auth.userId },
+          select: { projectId: true, role: true, project: { select: { id: true, name: true } } },
+        })
+        const projectIds = memberships.map((m) => m.projectId)
+        if (projectIds.length === 0) {
+          return { teammates: [], projects: [] }
+        }
+        const myRoleByProject = new Map(memberships.map((m) => [m.projectId, m.role]))
+        const allMembers = await prisma.projectMember.findMany({
+          where: { projectId: { in: projectIds } },
+          include: {
+            user: { select: { id: true, name: true, email: true, role: true, blocked: true } },
+            project: { select: { id: true, name: true } },
+          },
+        })
+        type ShareEntry = { projectId: string; projectName: string; myRole: string; theirRole: string }
+        type Teammate = {
+          id: string
+          name: string
+          email: string
+          role: string
+          blocked: boolean
+          sharedProjects: ShareEntry[]
+        }
+        const teammateMap = new Map<string, Teammate>()
+        for (const m of allMembers) {
+          if (m.userId === auth.userId) continue
+          if (m.user.blocked) continue
+          const existing: Teammate = teammateMap.get(m.userId) ?? {
+            id: m.user.id,
+            name: m.user.name,
+            email: m.user.email,
+            role: m.user.role,
+            blocked: m.user.blocked,
+            sharedProjects: [],
+          }
+          existing.sharedProjects.push({
+            projectId: m.projectId,
+            projectName: m.project.name,
+            myRole: myRoleByProject.get(m.projectId) ?? 'MEMBER',
+            theirRole: m.role,
+          })
+          teammateMap.set(m.userId, existing)
+        }
+        const teammateIds = Array.from(teammateMap.keys())
+        if (teammateIds.length === 0) {
+          return {
+            teammates: [],
+            projects: memberships.map((m) => ({ id: m.project.id, name: m.project.name, myRole: m.role })),
+          }
+        }
+        const now = new Date()
+        const [openCounts, overdueCounts] = await Promise.all([
+          prisma.task.groupBy({
+            by: ['assigneeId'],
+            where: {
+              projectId: { in: projectIds },
+              assigneeId: { in: teammateIds },
+              status: { not: 'CLOSED' },
+            },
+            _count: { _all: true },
+          }),
+          prisma.task.groupBy({
+            by: ['assigneeId'],
+            where: {
+              projectId: { in: projectIds },
+              assigneeId: { in: teammateIds },
+              status: { not: 'CLOSED' },
+              dueAt: { lt: now },
+            },
+            _count: { _all: true },
+          }),
+        ])
+        const openByUser = new Map(openCounts.filter((c) => c.assigneeId).map((c) => [c.assigneeId!, c._count._all]))
+        const overdueByUser = new Map(
+          overdueCounts.filter((c) => c.assigneeId).map((c) => [c.assigneeId!, c._count._all]),
+        )
+        const teammates = Array.from(teammateMap.values()).map((t) => ({
+          ...t,
+          openTasks: openByUser.get(t.id) ?? 0,
+          overdueTasks: overdueByUser.get(t.id) ?? 0,
+        }))
+        teammates.sort((a, b) => b.openTasks - a.openTasks || a.name.localeCompare(b.name))
+        return {
+          teammates,
+          projects: memberships.map((m) => ({ id: m.project.id, name: m.project.name, myRole: m.role })),
+        }
+      })
+
+      .get('/api/me/team-activity', async ({ request, query, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const limitRaw = Number(query?.limit ?? 30)
+        const limit = Math.min(100, Math.max(1, Number.isFinite(limitRaw) ? limitRaw : 30))
+        const memberships = await prisma.projectMember.findMany({
+          where: { userId: auth.userId },
+          select: { projectId: true },
+        })
+        const projectIds = memberships.map((m) => m.projectId)
+        if (projectIds.length === 0) {
+          return { activity: [] }
+        }
+        const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
+        const [statusChanges, comments] = await Promise.all([
+          prisma.taskStatusChange.findMany({
+            where: {
+              createdAt: { gte: since },
+              task: { projectId: { in: projectIds } },
+            },
+            include: {
+              task: {
+                select: {
+                  id: true,
+                  title: true,
+                  projectId: true,
+                  project: { select: { id: true, name: true } },
+                },
+              },
+              author: { select: { id: true, name: true, email: true } },
+            },
+            orderBy: { createdAt: 'desc' },
+            take: limit,
+          }),
+          prisma.taskComment.findMany({
+            where: {
+              createdAt: { gte: since },
+              task: { projectId: { in: projectIds } },
+            },
+            include: {
+              task: {
+                select: {
+                  id: true,
+                  title: true,
+                  projectId: true,
+                  project: { select: { id: true, name: true } },
+                },
+              },
+              author: { select: { id: true, name: true, email: true } },
+            },
+            orderBy: { createdAt: 'desc' },
+            take: limit,
+          }),
+        ])
+        const items = [
+          ...statusChanges.map((s) => ({
+            kind: 'STATUS_CHANGE' as const,
+            id: `s_${s.id}`,
+            createdAt: s.createdAt.toISOString(),
+            author: s.author,
+            task: { id: s.task.id, title: s.task.title, projectId: s.task.projectId },
+            project: s.task.project,
+            detail: { fromStatus: s.fromStatus, toStatus: s.toStatus, body: null as string | null },
+          })),
+          ...comments.map((c) => ({
+            kind: 'COMMENT' as const,
+            id: `c_${c.id}`,
+            createdAt: c.createdAt.toISOString(),
+            author: c.author,
+            task: { id: c.task.id, title: c.task.title, projectId: c.task.projectId },
+            project: c.task.project,
+            detail: {
+              fromStatus: null as string | null,
+              toStatus: null as string | null,
+              body: c.body.slice(0, 200),
+            },
+          })),
+        ]
+          .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
+          .slice(0, limit)
+        return { activity: items }
       })
 
       // ─── Admin Agents API (SUPER_ADMIN only) ───────────

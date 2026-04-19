@@ -185,3 +185,8 @@ code {
     animation: none;
   }
 }
+
+.sidebar-user-card:hover,
+.sidebar-app-item:hover {
+  background-color: var(--mantine-color-default-hover);
+}

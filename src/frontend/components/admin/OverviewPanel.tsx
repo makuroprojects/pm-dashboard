@@ -5,7 +5,6 @@ import {
   Card,
   Group,
   Progress,
-  SegmentedControl,
   SimpleGrid,
   Skeleton,
   Stack,
@@ -16,7 +15,6 @@ import {
 } from '@mantine/core'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
-import type { EChartsOption } from 'echarts'
 import { useEffect, useMemo, useState } from 'react'
 import {
   TbActivity,
@@ -35,7 +33,6 @@ import {
 import { EmptyState } from '@/frontend/components/shared/EmptyState'
 import { SectionSkeleton } from '@/frontend/components/shared/LoadingState'
 import type { Role } from '@/frontend/hooks/useAuth'
-import { EChart } from '../charts/EChart'
 import { type AnalyticsData, AnalyticsSection } from './AnalyticsSection'
 
 interface AdminUser {
@@ -618,47 +615,10 @@ function KpiCard({
   )
 }
 
-const RISK_BAR_COLORS = ['#fa5252', '#fd7e14', '#e03131', '#fab005', '#ffd43b', '#c92a2a']
-
 function RedFlagsSection({ risks, navigate }: { risks: RiskReport; navigate: ReturnType<typeof useNavigate> }) {
   const s = risks.summary
-  const [view, setView] = useState<'chart' | 'list'>('chart')
   const nothing =
     s.overdueTasks + s.staleTasks + s.pastDueProjects + s.pendingAgents + s.offlineAgents + s.missingEnv === 0
-
-  const chartOpt = useMemo<EChartsOption>(() => {
-    const rows = [
-      { label: 'Overdue tasks', value: s.overdueTasks },
-      { label: 'Stale IN_PROGRESS', value: s.staleTasks },
-      { label: 'Past-due projects', value: s.pastDueProjects },
-      { label: 'Pending agents', value: s.pendingAgents },
-      { label: 'Offline agents', value: s.offlineAgents },
-      { label: 'Missing env', value: s.missingEnv },
-    ]
-    return {
-      tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-      grid: { left: 140, right: 24, top: 8, bottom: 8, containLabel: false },
-      xAxis: { type: 'value', minInterval: 1, splitLine: { show: true } },
-      yAxis: {
-        type: 'category',
-        data: rows.map((r) => r.label),
-        inverse: true,
-        axisLine: { show: false },
-        axisTick: { show: false },
-      },
-      series: [
-        {
-          type: 'bar',
-          data: rows.map((r, i) => ({
-            value: r.value,
-            itemStyle: { color: r.value > 0 ? RISK_BAR_COLORS[i] : '#ced4da', borderRadius: [0, 4, 4, 0] },
-          })),
-          barMaxWidth: 22,
-          label: { show: true, position: 'right', fontSize: 11, color: 'inherit' },
-        },
-      ],
-    }
-  }, [s])
 
   if (nothing) {
     return (
@@ -692,35 +652,16 @@ function RedFlagsSection({ risks, navigate }: { risks: RiskReport; navigate: Ret
             </ThemeIcon>
           </Tooltip>
         </Group>
-        <SegmentedControl
-          size="xs"
-          value={view}
-          onChange={(v) => setView(v as 'chart' | 'list')}
-          data={[
-            { label: 'Chart', value: 'chart' },
-            { label: 'List', value: 'list' },
-          ]}
-        />
       </Group>
 
-      {view === 'chart' ? (
-        <div style={{ marginBottom: 12 }}>
-          <EChart option={chartOpt} height={200} />
-        </div>
-      ) : (
-        <SimpleGrid cols={{ base: 2, md: 3, lg: 6 }} spacing="xs" mb="md">
-          <RiskStat label="Overdue tasks" value={s.overdueTasks} color={s.overdueTasks > 0 ? 'red' : 'gray'} />
-          <RiskStat label="Stale IN_PROGRESS" value={s.staleTasks} color={s.staleTasks > 0 ? 'orange' : 'gray'} />
-          <RiskStat
-            label="Past-due projects"
-            value={s.pastDueProjects}
-            color={s.pastDueProjects > 0 ? 'red' : 'gray'}
-          />
-          <RiskStat label="Pending agents" value={s.pendingAgents} color={s.pendingAgents > 0 ? 'orange' : 'gray'} />
-          <RiskStat label="Offline agents" value={s.offlineAgents} color={s.offlineAgents > 0 ? 'yellow' : 'gray'} />
-          <RiskStat label="Missing env" value={s.missingEnv} color={s.missingEnv > 0 ? 'red' : 'gray'} />
-        </SimpleGrid>
-      )}
+      <SimpleGrid cols={{ base: 2, md: 3, lg: 6 }} spacing="xs" mb="md">
+        <RiskStat label="Overdue tasks" value={s.overdueTasks} color={s.overdueTasks > 0 ? 'red' : 'gray'} />
+        <RiskStat label="Stale IN_PROGRESS" value={s.staleTasks} color={s.staleTasks > 0 ? 'orange' : 'gray'} />
+        <RiskStat label="Past-due projects" value={s.pastDueProjects} color={s.pastDueProjects > 0 ? 'red' : 'gray'} />
+        <RiskStat label="Pending agents" value={s.pendingAgents} color={s.pendingAgents > 0 ? 'orange' : 'gray'} />
+        <RiskStat label="Offline agents" value={s.offlineAgents} color={s.offlineAgents > 0 ? 'yellow' : 'gray'} />
+        <RiskStat label="Missing env" value={s.missingEnv} color={s.missingEnv > 0 ? 'red' : 'gray'} />
+      </SimpleGrid>
 
       {risks.missingEnv.length > 0 && (
         <Alert color="red" variant="light" mb="xs">

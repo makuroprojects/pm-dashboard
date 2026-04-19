@@ -456,7 +456,7 @@ export async function computeRiskReport(opts: { staleDays?: number; offlineHours
 
 export async function computeAnalytics(opts: { timelineLimit?: number; trendDays?: number } = {}) {
   const timelineLimit = opts.timelineLimit ?? 12
-  const trendDays = Math.max(1, Math.min(60, opts.trendDays ?? 14))
+  const trendDays = Math.max(1, Math.min(90, opts.trendDays ?? 14))
   const now = new Date()
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
   const trendStart = new Date(today.getTime() - (trendDays - 1) * DAY_MS)

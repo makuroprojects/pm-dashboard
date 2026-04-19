@@ -13,8 +13,8 @@ export function getOnlineUserIds(): string[] {
 function broadcast() {
   const online = getOnlineUserIds()
   const msg = JSON.stringify({ type: 'presence', online })
-  for (const ws of adminSubs) {
-    ws.send(msg)
+  for (const set of connections.values()) {
+    for (const ws of set) ws.send(msg)
   }
 }
 
@@ -26,10 +26,11 @@ export function addConnection(ws: ServerWebSocket<{ userId: string }>, userId: s
   }
   set.add(ws)
 
+  // Every connected user gets current presence snapshot on connect
+  ws.send(JSON.stringify({ type: 'presence', online: getOnlineUserIds() }))
+
   if (isAdmin) {
     adminSubs.add(ws)
-    // Send current state immediately to new admin subscriber
-    ws.send(JSON.stringify({ type: 'presence', online: getOnlineUserIds() }))
   }
 
   broadcast()

@@ -2,7 +2,6 @@ import {
   ActionIcon,
   Badge,
   Card,
-  Container,
   Group,
   Pagination,
   SegmentedControl,
@@ -21,6 +20,7 @@ import { useNavigate } from '@tanstack/react-router'
 import { useEffect, useMemo, useState } from 'react'
 import { TbAlertTriangle, TbBan, TbClock, TbListCheck, TbRefresh, TbSearch, TbUserQuestion } from 'react-icons/tb'
 import { EmptyRow } from '@/frontend/components/shared/EmptyState'
+import { InfoTip } from '@/frontend/components/shared/InfoTip'
 
 type TaskStatus = 'OPEN' | 'IN_PROGRESS' | 'READY_FOR_QC' | 'REOPENED' | 'CLOSED'
 type TaskPriority = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'
@@ -191,218 +191,270 @@ export function TaskTriagePanel() {
     !!search || !!projectFilter || !!statusFilter || !!priorityFilter || !!assigneeFilter || quick !== 'all'
 
   return (
-    <Container size="xl" px={0}>
-      <Stack gap="lg">
-        <Group justify="space-between">
-          <div>
+    <Stack gap="lg">
+      <Group justify="space-between">
+        <div>
+          <Group gap="xs">
             <Title order={3}>Task Triage</Title>
-            <Text size="sm" c="dimmed">
-              Fokus ke task yang butuh perhatian di seluruh project.
-            </Text>
-          </div>
-          <Tooltip label="Refresh">
-            <ActionIcon variant="subtle" onClick={() => refetch()} loading={isFetching}>
-              <TbRefresh size={16} />
-            </ActionIcon>
-          </Tooltip>
-        </Group>
+            <InfoTip
+              width={360}
+              label="Panel untuk mencari task yang butuh perhatian lintas project: overdue, unassigned, blocked by dependency, atau stale >7 hari. Data polling 30 detik, di-cap 500 task terbaru."
+            />
+          </Group>
+          <Text size="sm" c="dimmed">
+            Fokus ke task yang butuh perhatian di seluruh project.
+          </Text>
+        </div>
+        <Tooltip label="Refresh">
+          <ActionIcon variant="subtle" onClick={() => refetch()} loading={isFetching}>
+            <TbRefresh size={16} />
+          </ActionIcon>
+        </Tooltip>
+      </Group>
 
-        <SimpleGrid cols={{ base: 2, md: 5 }} spacing="md">
-          <StatCard label="Open" value={stats.total} icon={TbListCheck} color="blue" />
-          <StatCard label="Overdue" value={stats.overdue} icon={TbAlertTriangle} color="red" />
-          <StatCard label="Unassigned" value={stats.unassigned} icon={TbUserQuestion} color="orange" />
-          <StatCard label="Blocked" value={stats.blocked} icon={TbBan} color="grape" />
-          <StatCard label={`Stale >${STALE_DAYS}d`} value={stats.stale} icon={TbClock} color="yellow" />
-        </SimpleGrid>
+      <SimpleGrid cols={{ base: 2, md: 5 }} spacing="md">
+        <StatCard
+          label="Open"
+          value={stats.total}
+          icon={TbListCheck}
+          color="blue"
+          tip="Task dengan status selain CLOSED. Total beban kerja yang masih harus dikerjakan."
+        />
+        <StatCard
+          label="Overdue"
+          value={stats.overdue}
+          icon={TbAlertTriangle}
+          color="red"
+          tip="Task open dengan dueAt sudah lewat hari ini. Perlu prioritas segera atau di-extend deadline-nya."
+        />
+        <StatCard
+          label="Unassigned"
+          value={stats.unassigned}
+          icon={TbUserQuestion}
+          color="orange"
+          tip="Task open tanpa assignee. Risiko: tidak ada yang merasa bertanggung jawab, kemungkinan besar akan stale."
+        />
+        <StatCard
+          label="Blocked"
+          value={stats.blocked}
+          icon={TbBan}
+          color="grape"
+          tip="Task open dengan TaskDependency (blockedBy > 0). Harus menunggu task lain selesai dulu sebelum bisa dikerjakan."
+        />
+        <StatCard
+          label={`Stale >${STALE_DAYS}d`}
+          value={stats.stale}
+          icon={TbClock}
+          color="yellow"
+          tip={`Task open dengan updatedAt > ${STALE_DAYS} hari lalu. Tidak ada pergerakan — mungkin stuck, lupa, atau perlu re-triage.`}
+        />
+      </SimpleGrid>
 
-        <Card withBorder padding="sm" radius="md">
-          <Stack gap="xs">
-            <Group gap="sm" wrap="wrap">
-              <TextInput
-                placeholder="Cari judul, project, atau assignee"
-                leftSection={<TbSearch size={12} />}
-                value={search}
-                onChange={(e) => setSearch(e.currentTarget.value)}
-                size="xs"
-                w={280}
-              />
-              <Select
-                placeholder="All projects"
-                data={projectOptions}
-                value={projectFilter}
-                onChange={setProjectFilter}
-                clearable
-                searchable
-                size="xs"
-                w={200}
-              />
-              <Select
-                placeholder="All statuses"
-                data={['OPEN', 'IN_PROGRESS', 'READY_FOR_QC', 'REOPENED', 'CLOSED']}
-                value={statusFilter}
-                onChange={setStatusFilter}
-                clearable
-                size="xs"
-                w={160}
-              />
-              <Select
-                placeholder="All priorities"
-                data={['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']}
-                value={priorityFilter}
-                onChange={setPriorityFilter}
-                clearable
-                size="xs"
-                w={140}
-              />
-              <Select
-                placeholder="All assignees"
-                data={[{ value: '__none__', label: '— Unassigned —' }, ...assigneeOptions]}
-                value={assigneeFilter}
-                onChange={setAssigneeFilter}
-                clearable
-                searchable
-                size="xs"
-                w={220}
-              />
-              <Badge variant="light" size="sm" ml="auto">
-                {filtered.length} of {tasks.length}
-              </Badge>
-            </Group>
-            <Group gap="sm" wrap="wrap">
+      <Card withBorder padding="sm" radius="md">
+        <Stack gap="xs">
+          <Group gap="sm" wrap="wrap">
+            <TextInput
+              placeholder="Cari judul, project, atau assignee"
+              leftSection={<TbSearch size={12} />}
+              value={search}
+              onChange={(e) => setSearch(e.currentTarget.value)}
+              size="xs"
+              w={280}
+            />
+            <Select
+              placeholder="All projects"
+              data={projectOptions}
+              value={projectFilter}
+              onChange={setProjectFilter}
+              clearable
+              searchable
+              size="xs"
+              w={200}
+            />
+            <Select
+              placeholder="All statuses"
+              data={['OPEN', 'IN_PROGRESS', 'READY_FOR_QC', 'REOPENED', 'CLOSED']}
+              value={statusFilter}
+              onChange={setStatusFilter}
+              clearable
+              size="xs"
+              w={160}
+            />
+            <Select
+              placeholder="All priorities"
+              data={['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']}
+              value={priorityFilter}
+              onChange={setPriorityFilter}
+              clearable
+              size="xs"
+              w={140}
+            />
+            <Select
+              placeholder="All assignees"
+              data={[{ value: '__none__', label: '— Unassigned —' }, ...assigneeOptions]}
+              value={assigneeFilter}
+              onChange={setAssigneeFilter}
+              clearable
+              searchable
+              size="xs"
+              w={220}
+            />
+            <Badge variant="light" size="sm" ml="auto">
+              {filtered.length} of {tasks.length}
+            </Badge>
+          </Group>
+          <Group gap="sm" wrap="wrap">
+            <Group gap={4} wrap="nowrap">
               <Text size="xs" c="dimmed" fw={500} tt="uppercase">
                 Attention
               </Text>
-              <SegmentedControl
-                size="xs"
-                value={quick}
-                onChange={(v) => setQuick(v as QuickFilter)}
-                data={[
-                  { label: 'All', value: 'all' },
-                  { label: 'Overdue', value: 'overdue' },
-                  { label: 'Unassigned', value: 'unassigned' },
-                  { label: 'Blocked', value: 'blocked' },
-                  { label: `Stale >${STALE_DAYS}d`, value: 'stale' },
-                ]}
+              <InfoTip
+                width={320}
+                label="Quick filter untuk tampilkan hanya task yang match kondisi: Overdue = past dueAt, Unassigned = tanpa assignee, Blocked = ada TaskDependency aktif, Stale = updatedAt > 7 hari."
+                size={12}
               />
-              {hasFilters && (
-                <Text
-                  size="xs"
-                  c="dimmed"
-                  style={{ cursor: 'pointer', textDecoration: 'underline' }}
-                  onClick={clearFilters}
-                >
-                  Clear
-                </Text>
-              )}
             </Group>
-          </Stack>
-        </Card>
-
-        <Card withBorder padding={0} radius="md">
-          <Table highlightOnHover verticalSpacing="sm" horizontalSpacing="md">
-            <Table.Thead>
-              <Table.Tr>
-                <Table.Th>Task</Table.Th>
-                <Table.Th>Project</Table.Th>
-                <Table.Th>Status</Table.Th>
-                <Table.Th>Priority</Table.Th>
-                <Table.Th>Assignee</Table.Th>
-                <Table.Th>Due</Table.Th>
-                <Table.Th>Age</Table.Th>
-              </Table.Tr>
-            </Table.Thead>
-            <Table.Tbody>
-              {isLoading && (
-                <Table.Tr>
-                  <Table.Td colSpan={7}>
-                    <EmptyRow icon={TbListCheck} title="Memuat task…" />
-                  </Table.Td>
-                </Table.Tr>
-              )}
-              {!isLoading && filtered.length === 0 && (
-                <Table.Tr>
-                  <Table.Td colSpan={7}>
-                    <EmptyRow
-                      icon={TbSearch}
-                      title="Tidak ada task yang cocok"
-                      message="Coba ubah filter atau reset pencarian."
-                    />
-                  </Table.Td>
-                </Table.Tr>
-              )}
-              {pagedFiltered.map((t) => {
-                const overdue = isOverdue(t)
-                const stale = isStale(t)
-                return (
-                  <Table.Tr key={t.id} style={{ cursor: 'pointer' }} onClick={() => openTask(t)}>
-                    <Table.Td>
-                      <Group gap="xs" wrap="nowrap">
-                        <Badge color={KIND_COLOR[t.kind]} variant="dot" size="xs">
-                          {t.kind}
-                        </Badge>
-                        <Text size="sm" fw={500} lineClamp={1}>
-                          {t.title}
-                        </Text>
-                        {t._count.blockedBy > 0 && (
-                          <Tooltip label={`Blocked by ${t._count.blockedBy}`}>
-                            <Badge color="grape" variant="light" size="xs" leftSection={<TbBan size={10} />}>
-                              {t._count.blockedBy}
-                            </Badge>
-                          </Tooltip>
-                        )}
-                      </Group>
-                    </Table.Td>
-                    <Table.Td>
-                      <Text size="xs" c="dimmed" lineClamp={1}>
-                        {t.project.name}
-                      </Text>
-                    </Table.Td>
-                    <Table.Td>
-                      <Badge color={STATUS_COLOR[t.status]} variant="light" size="sm">
-                        {t.status.replace('_', ' ')}
-                      </Badge>
-                    </Table.Td>
-                    <Table.Td>
-                      <Badge color={PRIORITY_COLOR[t.priority]} variant="dot" size="sm">
-                        {t.priority}
-                      </Badge>
-                    </Table.Td>
-                    <Table.Td>
-                      {t.assignee ? (
-                        <Text size="xs">{t.assignee.name}</Text>
-                      ) : (
-                        <Badge color="orange" variant="light" size="xs">
-                          Unassigned
-                        </Badge>
-                      )}
-                    </Table.Td>
-                    <Table.Td>
-                      <Text size="xs" c={overdue ? 'red' : 'dimmed'} fw={overdue ? 600 : undefined}>
-                        {formatDate(t.dueAt)}
-                      </Text>
-                    </Table.Td>
-                    <Table.Td>
-                      <Text size="xs" c={stale ? 'yellow.7' : 'dimmed'} fw={stale ? 600 : undefined}>
-                        {formatAge(t.updatedAt)}
-                      </Text>
-                    </Table.Td>
-                  </Table.Tr>
-                )
-              })}
-            </Table.Tbody>
-          </Table>
-          {filtered.length > PAGE_SIZE && (
-            <Group justify="space-between" p="md">
-              <Text size="xs" c="dimmed">
-                {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, filtered.length)} dari{' '}
-                {filtered.length}
+            <SegmentedControl
+              size="xs"
+              value={quick}
+              onChange={(v) => setQuick(v as QuickFilter)}
+              data={[
+                { label: 'All', value: 'all' },
+                { label: 'Overdue', value: 'overdue' },
+                { label: 'Unassigned', value: 'unassigned' },
+                { label: 'Blocked', value: 'blocked' },
+                { label: `Stale >${STALE_DAYS}d`, value: 'stale' },
+              ]}
+            />
+            {hasFilters && (
+              <Text
+                size="xs"
+                c="dimmed"
+                style={{ cursor: 'pointer', textDecoration: 'underline' }}
+                onClick={clearFilters}
+              >
+                Clear
               </Text>
-              <Pagination value={safePage} onChange={setPage} total={totalPages} size="sm" />
-            </Group>
-          )}
-        </Card>
-      </Stack>
-    </Container>
+            )}
+          </Group>
+        </Stack>
+      </Card>
+
+      <Card withBorder padding={0} radius="md">
+        <Table highlightOnHover verticalSpacing="sm" horizontalSpacing="md">
+          <Table.Thead>
+            <Table.Tr>
+              <Table.Th>Task</Table.Th>
+              <Table.Th>Project</Table.Th>
+              <Table.Th>Status</Table.Th>
+              <Table.Th>Priority</Table.Th>
+              <Table.Th>Assignee</Table.Th>
+              <Table.Th>
+                <Tooltip label="Deadline task (dueAt). Merah = sudah lewat hari ini.">
+                  <span style={{ cursor: 'help', textDecoration: 'underline dotted' }}>Due</span>
+                </Tooltip>
+              </Table.Th>
+              <Table.Th>
+                <Tooltip label="Berapa hari sejak task terakhir diupdate (updatedAt). Kuning = >7 hari tidak bergerak.">
+                  <span style={{ cursor: 'help', textDecoration: 'underline dotted' }}>Age</span>
+                </Tooltip>
+              </Table.Th>
+            </Table.Tr>
+          </Table.Thead>
+          <Table.Tbody>
+            {isLoading && (
+              <Table.Tr>
+                <Table.Td colSpan={7}>
+                  <EmptyRow icon={TbListCheck} title="Memuat task…" />
+                </Table.Td>
+              </Table.Tr>
+            )}
+            {!isLoading && filtered.length === 0 && (
+              <Table.Tr>
+                <Table.Td colSpan={7}>
+                  <EmptyRow
+                    icon={TbSearch}
+                    title="Tidak ada task yang cocok"
+                    message="Coba ubah filter atau reset pencarian."
+                  />
+                </Table.Td>
+              </Table.Tr>
+            )}
+            {pagedFiltered.map((t) => {
+              const overdue = isOverdue(t)
+              const stale = isStale(t)
+              return (
+                <Table.Tr key={t.id} style={{ cursor: 'pointer' }} onClick={() => openTask(t)}>
+                  <Table.Td>
+                    <Group gap="xs" wrap="nowrap">
+                      <Badge color={KIND_COLOR[t.kind]} variant="dot" size="xs">
+                        {t.kind}
+                      </Badge>
+                      <Text size="sm" fw={500} lineClamp={1}>
+                        {t.title}
+                      </Text>
+                      {t._count.blockedBy > 0 && (
+                        <Tooltip
+                          multiline
+                          w={240}
+                          label={`Task ini tergantung pada ${t._count.blockedBy} task lain yang belum selesai (TaskDependency). Baru bisa lanjut setelah semua blocker ditutup.`}
+                        >
+                          <Badge color="grape" variant="light" size="xs" leftSection={<TbBan size={10} />}>
+                            {t._count.blockedBy}
+                          </Badge>
+                        </Tooltip>
+                      )}
+                    </Group>
+                  </Table.Td>
+                  <Table.Td>
+                    <Text size="xs" c="dimmed" lineClamp={1}>
+                      {t.project.name}
+                    </Text>
+                  </Table.Td>
+                  <Table.Td>
+                    <Badge color={STATUS_COLOR[t.status]} variant="light" size="sm">
+                      {t.status.replace('_', ' ')}
+                    </Badge>
+                  </Table.Td>
+                  <Table.Td>
+                    <Badge color={PRIORITY_COLOR[t.priority]} variant="dot" size="sm">
+                      {t.priority}
+                    </Badge>
+                  </Table.Td>
+                  <Table.Td>
+                    {t.assignee ? (
+                      <Text size="xs">{t.assignee.name}</Text>
+                    ) : (
+                      <Badge color="orange" variant="light" size="xs">
+                        Unassigned
+                      </Badge>
+                    )}
+                  </Table.Td>
+                  <Table.Td>
+                    <Text size="xs" c={overdue ? 'red' : 'dimmed'} fw={overdue ? 600 : undefined}>
+                      {formatDate(t.dueAt)}
+                    </Text>
+                  </Table.Td>
+                  <Table.Td>
+                    <Text size="xs" c={stale ? 'yellow.7' : 'dimmed'} fw={stale ? 600 : undefined}>
+                      {formatAge(t.updatedAt)}
+                    </Text>
+                  </Table.Td>
+                </Table.Tr>
+              )
+            })}
+          </Table.Tbody>
+        </Table>
+        {filtered.length > PAGE_SIZE && (
+          <Group justify="space-between" p="md">
+            <Text size="xs" c="dimmed">
+              {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, filtered.length)} dari {filtered.length}
+            </Text>
+            <Pagination value={safePage} onChange={setPage} total={totalPages} size="sm" />
+          </Group>
+        )}
+      </Card>
+    </Stack>
   )
 }
 
@@ -411,19 +463,24 @@ function StatCard({
   value,
   icon: Icon,
   color,
+  tip,
 }: {
   label: string
   value: number
   icon: typeof TbListCheck
   color: string
+  tip?: string
 }) {
   return (
     <Card withBorder padding="md" radius="md">
       <Group justify="space-between" align="flex-start">
-        <div>
-          <Text size="xs" c="dimmed" fw={500} tt="uppercase">
-            {label}
-          </Text>
+        <div style={{ flex: 1 }}>
+          <Group gap={4} wrap="nowrap">
+            <Text size="xs" c="dimmed" fw={500} tt="uppercase">
+              {label}
+            </Text>
+            {tip && <InfoTip label={tip} size={12} />}
+          </Group>
           <Text fw={700} size="xl">
             {value}
           </Text>

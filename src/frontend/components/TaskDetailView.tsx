@@ -6,32 +6,40 @@ import {
   Button,
   Card,
   Checkbox,
+  CopyButton,
   Divider,
   Group,
-  Loader,
   MultiSelect,
   NumberInput,
   Progress,
   Select,
+  SimpleGrid,
+  Skeleton,
   Stack,
   Tabs,
   Text,
   Textarea,
   TextInput,
+  ThemeIcon,
   Title,
   Tooltip,
 } from '@mantine/core'
 import { DateInput } from '@mantine/dates'
+import { useHotkeys } from '@mantine/hooks'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useState } from 'react'
 import {
   TbActivity,
+  TbAlertTriangle,
   TbApps,
   TbArrowLeft,
+  TbBug,
   TbCalendarEvent,
   TbCheck,
+  TbChecks,
   TbClock,
   TbCloudUpload,
+  TbCopy,
   TbDeviceDesktop,
   TbLink,
   TbListCheck,
@@ -40,6 +48,7 @@ import {
   TbPaperclip,
   TbPlus,
   TbRefresh,
+  TbShieldCheck,
   TbTag,
   TbTarget,
   TbTrash,
@@ -372,11 +381,13 @@ export function TaskDetailView({ taskId, onBack }: { taskId: string; onBack: () 
     onError: (err) => notifyError(err),
   })
 
+  useHotkeys([['Escape', onBack]])
+
   return (
     <Stack gap="md">
       <Group justify="space-between" wrap="wrap" gap="sm">
         <Group gap="xs" wrap="nowrap" style={{ minWidth: 0, flex: 1 }}>
-          <Tooltip label="Back to tasks">
+          <Tooltip label="Kembali ke daftar task (Esc)">
             <ActionIcon variant="subtle" size="lg" onClick={onBack} aria-label="Back">
               <TbArrowLeft size={18} />
             </ActionIcon>
@@ -388,67 +399,150 @@ export function TaskDetailView({ taskId, onBack }: { taskId: string; onBack: () 
               { label: task?.title ?? `#${taskId.slice(0, 8)}` },
             ]}
           />
+          {task && (
+            <CopyButton value={task.id} timeout={1500}>
+              {({ copied, copy }) => (
+                <Tooltip label={copied ? 'ID disalin' : 'Salin task ID'}>
+                  <ActionIcon variant="subtle" size="sm" onClick={copy} color={copied ? 'teal' : 'gray'}>
+                    {copied ? <TbChecks size={14} /> : <TbCopy size={14} />}
+                  </ActionIcon>
+                </Tooltip>
+              )}
+            </CopyButton>
+          )}
         </Group>
-        <Tooltip label="Refresh">
-          <ActionIcon variant="light" size="lg" onClick={() => taskQ.refetch()} loading={taskQ.isFetching}>
-            <TbRefresh size={16} />
-          </ActionIcon>
-        </Tooltip>
+        <Group gap="xs">
+          {taskQ.isFetching && !taskQ.isLoading && (
+            <Badge variant="dot" color="blue" size="sm">
+              Sinkronisasi…
+            </Badge>
+          )}
+          <Tooltip label="Refresh data">
+            <ActionIcon variant="light" size="lg" onClick={() => taskQ.refetch()} loading={taskQ.isFetching}>
+              <TbRefresh size={16} />
+            </ActionIcon>
+          </Tooltip>
+        </Group>
       </Group>
 
       {taskQ.isLoading ? (
-        <Card withBorder p="xl" radius="md">
-          <Group justify="center">
-            <Loader size="sm" />
-            <Text size="sm" c="dimmed">
-              Loading task…
-            </Text>
-          </Group>
-        </Card>
+        <Stack gap="md">
+          <Card withBorder padding="md" radius="md">
+            <Group gap="sm" align="flex-start">
+              <Skeleton height={48} width={48} radius="md" />
+              <Stack gap={6} style={{ flex: 1 }}>
+                <Skeleton height={24} width="50%" />
+                <Skeleton height={14} width="70%" />
+                <Group gap={6}>
+                  <Skeleton height={18} width={50} radius="xl" />
+                  <Skeleton height={18} width={70} radius="xl" />
+                  <Skeleton height={18} width={60} radius="xl" />
+                </Group>
+              </Stack>
+            </Group>
+          </Card>
+          <Card withBorder padding="md" radius="md">
+            <SimpleGrid cols={{ base: 2, sm: 4 }} spacing="md">
+              <Skeleton height={44} />
+              <Skeleton height={44} />
+              <Skeleton height={44} />
+              <Skeleton height={44} />
+            </SimpleGrid>
+          </Card>
+          <Card withBorder padding="md" radius="md">
+            <Stack gap="sm">
+              <Skeleton height={14} width="20%" />
+              <Skeleton height={80} />
+            </Stack>
+          </Card>
+        </Stack>
       ) : taskQ.error ? (
-        <Alert color="red" title="Failed to load task">
-          {(taskQ.error as Error).message}
+        <Alert color="red" icon={<TbAlertTriangle size={18} />} title="Gagal memuat task" radius="md">
+          <Stack gap="sm">
+            <Text size="sm">{(taskQ.error as Error).message}</Text>
+            <Group>
+              <Button
+                size="xs"
+                variant="light"
+                color="red"
+                onClick={() => taskQ.refetch()}
+                leftSection={<TbRefresh size={14} />}
+              >
+                Coba lagi
+              </Button>
+              <Button size="xs" variant="subtle" onClick={onBack}>
+                Kembali
+              </Button>
+            </Group>
+          </Stack>
         </Alert>
       ) : !task ? (
-        <Alert color="yellow">Task not found.</Alert>
+        <Alert color="yellow" icon={<TbAlertTriangle size={18} />} radius="md">
+          Task tidak ditemukan atau kamu tidak punya akses.
+        </Alert>
       ) : (
         <Stack gap="md">
-          <div>
-            <Title order={3}>{task.title}</Title>
-            <Text size="xs" c="dimmed">
-              Task #{task.id.slice(0, 8)} · {task.project.name} · reported by {task.reporter.name} ·{' '}
-              {new Date(task.createdAt).toLocaleString()}
-            </Text>
-          </div>
-
-          <Group gap="xs" wrap="wrap">
-            <Badge color={KIND_COLOR[task.kind]} variant="light">
-              {task.kind}
-            </Badge>
-            <Badge color={STATUS_COLOR[task.status]} variant="light">
-              {task.status.replace('_', ' ')}
-            </Badge>
-            <Badge color={PRIORITY_COLOR[task.priority]} variant="dot">
-              {task.priority}
-            </Badge>
-            {task.route ? (
-              <Badge color="gray" variant="outline" leftSection={<TbLink size={10} />}>
-                {task.route}
-              </Badge>
-            ) : null}
-            {task.tags.map((t) => (
-              <Badge key={t.tagId} color={t.tag.color} variant="light" leftSection={<TbTag size={10} />}>
-                {t.tag.name}
-              </Badge>
-            ))}
-            {task.blockedBy.length > 0 && task.status !== 'CLOSED' && (
-              <Tooltip label={`Blocked by ${task.blockedBy.length} task(s)`}>
-                <Badge color="gray" variant="filled" leftSection={<TbLock size={10} />}>
-                  blocked
-                </Badge>
-              </Tooltip>
-            )}
-          </Group>
+          <Card withBorder padding="md" radius="md">
+            <Group gap="sm" align="flex-start" wrap="nowrap">
+              <ThemeIcon variant="light" color={KIND_COLOR[task.kind]} size="xl" radius="md">
+                {task.kind === 'BUG' ? (
+                  <TbBug size={22} />
+                ) : task.kind === 'QC' ? (
+                  <TbShieldCheck size={22} />
+                ) : (
+                  <TbListCheck size={22} />
+                )}
+              </ThemeIcon>
+              <Stack gap={4} style={{ flex: 1, minWidth: 0 }}>
+                <Title order={2} style={{ lineHeight: 1.2 }}>
+                  {task.title}
+                </Title>
+                <Text size="xs" c="dimmed">
+                  #{task.id.slice(0, 8)} · {task.project.name} · dilaporkan oleh {task.reporter.name} ·{' '}
+                  {new Date(task.createdAt).toLocaleString()}
+                </Text>
+                <Group gap={6} wrap="wrap" mt={2}>
+                  <Badge color={KIND_COLOR[task.kind]} variant="light" size="sm">
+                    {task.kind}
+                  </Badge>
+                  <Badge color={STATUS_COLOR[task.status]} variant="light" size="sm">
+                    {task.status.replace('_', ' ')}
+                  </Badge>
+                  <Badge color={PRIORITY_COLOR[task.priority]} variant="dot" size="sm">
+                    {task.priority}
+                  </Badge>
+                  {task.assignee && (
+                    <Badge color="blue" variant="outline" size="sm">
+                      @ {task.assignee.name}
+                    </Badge>
+                  )}
+                  {task.route && (
+                    <Badge color="gray" variant="outline" size="sm" leftSection={<TbLink size={10} />}>
+                      {task.route}
+                    </Badge>
+                  )}
+                  {task.tags.map((t) => (
+                    <Badge
+                      key={t.tagId}
+                      color={t.tag.color}
+                      variant="light"
+                      size="sm"
+                      leftSection={<TbTag size={10} />}
+                    >
+                      {t.tag.name}
+                    </Badge>
+                  ))}
+                  {task.blockedBy.length > 0 && task.status !== 'CLOSED' && (
+                    <Tooltip label={`Blocked by ${task.blockedBy.length} task(s)`}>
+                      <Badge color="gray" variant="filled" size="sm" leftSection={<TbLock size={10} />}>
+                        blocked
+                      </Badge>
+                    </Tooltip>
+                  )}
+                </Group>
+              </Stack>
+            </Group>
+          </Card>
 
           <HoursProgressCard task={task} />
 
@@ -571,74 +665,127 @@ export function TaskDetailView({ taskId, onBack }: { taskId: string; onBack: () 
             </Card>
           )}
 
-          <Tabs defaultValue="checklist" keepMounted={false}>
-            <Tabs.List>
-              <Tabs.Tab value="checklist" leftSection={<TbListCheck size={14} />}>
-                Checklist ({task.checklist.filter((c) => c.done).length}/{task.checklist.length})
-              </Tabs.Tab>
-              <Tabs.Tab value="dependencies" leftSection={<TbLock size={14} />}>
-                Deps ({task.blockedBy.length}/{task.blocks.length})
-              </Tabs.Tab>
-              <Tabs.Tab value="comments" leftSection={<TbMessage size={14} />}>
-                Comments ({task.comments.length})
-              </Tabs.Tab>
-              <Tabs.Tab value="evidence" leftSection={<TbPaperclip size={14} />}>
-                Evidence ({task.evidence.length})
-              </Tabs.Tab>
-              <Tabs.Tab value="activity" leftSection={<TbActivity size={14} />}>
-                Activity
-              </Tabs.Tab>
-            </Tabs.List>
+          <Card withBorder radius="md" padding={0} style={{ overflow: 'hidden' }}>
+            <Tabs
+              defaultValue="checklist"
+              keepMounted={false}
+              styles={{
+                list: {
+                  paddingInline: 'var(--mantine-spacing-sm)',
+                  paddingTop: 6,
+                  background: 'var(--mantine-color-default-hover)',
+                },
+                tab: {
+                  fontWeight: 500,
+                },
+              }}
+            >
+              <Tabs.List>
+                <Tabs.Tab
+                  value="checklist"
+                  leftSection={<TbListCheck size={14} />}
+                  rightSection={
+                    task.checklist.length ? (
+                      <TabCount
+                        value={`${task.checklist.filter((c) => c.done).length}/${task.checklist.length}`}
+                        color={task.checklist.every((c) => c.done) && task.checklist.length > 0 ? 'green' : 'gray'}
+                      />
+                    ) : undefined
+                  }
+                >
+                  Checklist
+                </Tabs.Tab>
+                <Tabs.Tab
+                  value="dependencies"
+                  leftSection={<TbLock size={14} />}
+                  rightSection={
+                    task.blockedBy.length + task.blocks.length > 0 ? (
+                      <TabCount
+                        value={`${task.blockedBy.length}/${task.blocks.length}`}
+                        color={task.blockedBy.length > 0 ? 'orange' : 'gray'}
+                      />
+                    ) : undefined
+                  }
+                >
+                  Dependencies
+                </Tabs.Tab>
+                <Tabs.Tab
+                  value="comments"
+                  leftSection={<TbMessage size={14} />}
+                  rightSection={task.comments.length ? <TabCount value={task.comments.length} /> : undefined}
+                >
+                  Comments
+                </Tabs.Tab>
+                <Tabs.Tab
+                  value="evidence"
+                  leftSection={<TbPaperclip size={14} />}
+                  rightSection={task.evidence.length ? <TabCount value={task.evidence.length} /> : undefined}
+                >
+                  Evidence
+                </Tabs.Tab>
+                <Tabs.Tab value="activity" leftSection={<TbActivity size={14} />}>
+                  Activity
+                </Tabs.Tab>
+              </Tabs.List>
 
-            <Tabs.Panel value="checklist" pt="md">
-              <ChecklistSection
-                items={task.checklist}
-                canWrite={canWrite}
-                onToggle={(id, done) => updateChecklist.mutate({ id, body: { done } })}
-                onAdd={(title) => addChecklist.mutate(title)}
-                onRemove={(id) => removeChecklist.mutate(id)}
-                adding={addChecklist.isPending}
-              />
-            </Tabs.Panel>
+              <Tabs.Panel value="checklist" p="md">
+                <ChecklistSection
+                  items={task.checklist}
+                  canWrite={canWrite}
+                  onToggle={(id, done) => updateChecklist.mutate({ id, body: { done } })}
+                  onAdd={(title) => addChecklist.mutate(title)}
+                  onRemove={(id) => removeChecklist.mutate(id)}
+                  adding={addChecklist.isPending}
+                />
+              </Tabs.Panel>
 
-            <Tabs.Panel value="dependencies" pt="md">
-              <DependenciesSection
-                task={task}
-                projectTasks={projectTasksQ.data?.tasks ?? []}
-                canWrite={canWrite}
-                onAdd={(blockedById) => addDependency.mutate(blockedById)}
-                onRemove={(blockedById) => removeDependency.mutate(blockedById)}
-              />
-            </Tabs.Panel>
+              <Tabs.Panel value="dependencies" p="md">
+                <DependenciesSection
+                  task={task}
+                  projectTasks={projectTasksQ.data?.tasks ?? []}
+                  canWrite={canWrite}
+                  onAdd={(blockedById) => addDependency.mutate(blockedById)}
+                  onRemove={(blockedById) => removeDependency.mutate(blockedById)}
+                />
+              </Tabs.Panel>
 
-            <Tabs.Panel value="comments" pt="md">
-              <CommentsSection
-                comments={task.comments}
-                canWrite={canWrite}
-                onSubmit={(body) => addComment.mutate(body)}
-                loading={addComment.isPending}
-                error={addComment.error ? (addComment.error as Error).message : undefined}
-              />
-            </Tabs.Panel>
+              <Tabs.Panel value="comments" p="md">
+                <CommentsSection
+                  comments={task.comments}
+                  canWrite={canWrite}
+                  onSubmit={(body) => addComment.mutate(body)}
+                  loading={addComment.isPending}
+                  error={addComment.error ? (addComment.error as Error).message : undefined}
+                />
+              </Tabs.Panel>
 
-            <Tabs.Panel value="evidence" pt="md">
-              <EvidenceSection
-                taskId={task.id}
-                items={task.evidence}
-                canWrite={canWrite}
-                onSubmit={(body) => addEvidence.mutate(body)}
-                loading={addEvidence.isPending}
-                error={addEvidence.error ? (addEvidence.error as Error).message : undefined}
-              />
-            </Tabs.Panel>
+              <Tabs.Panel value="evidence" p="md">
+                <EvidenceSection
+                  taskId={task.id}
+                  items={task.evidence}
+                  canWrite={canWrite}
+                  onSubmit={(body) => addEvidence.mutate(body)}
+                  loading={addEvidence.isPending}
+                  error={addEvidence.error ? (addEvidence.error as Error).message : undefined}
+                />
+              </Tabs.Panel>
 
-            <Tabs.Panel value="activity" pt="md">
-              <ActivityTimelineSection task={task} />
-            </Tabs.Panel>
-          </Tabs>
+              <Tabs.Panel value="activity" p="md">
+                <ActivityTimelineSection task={task} />
+              </Tabs.Panel>
+            </Tabs>
+          </Card>
         </Stack>
       )}
     </Stack>
+  )
+}
+
+function TabCount({ value, color = 'gray' }: { value: string | number; color?: string }) {
+  return (
+    <Badge size="xs" variant="light" color={color} circle>
+      {value}
+    </Badge>
   )
 }
 

@@ -12,6 +12,7 @@ import {
   Progress,
   Select,
   SimpleGrid,
+  Skeleton,
   Stack,
   Tabs,
   Text,
@@ -22,6 +23,7 @@ import {
   Tooltip,
 } from '@mantine/core'
 import { DateInput } from '@mantine/dates'
+import { useHotkeys } from '@mantine/hooks'
 import { modals } from '@mantine/modals'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
@@ -32,6 +34,7 @@ import {
   TbCalendarEvent,
   TbChecks,
   TbClock,
+  TbCopy,
   TbFlag,
   TbHistory,
   TbListCheck,
@@ -171,11 +174,15 @@ export function ProjectDetailView({
 
   const project = detailQ.data?.project
 
+  useHotkeys([['Escape', onBack]])
+
+  const tabCounts = project?._count
+
   return (
     <Stack gap="md">
       <Group justify="space-between" wrap="wrap" gap="sm">
         <Group gap="xs" wrap="nowrap" style={{ minWidth: 0, flex: 1 }}>
-          <Tooltip label="Back to projects">
+          <Tooltip label="Kembali ke daftar proyek (Esc)">
             <ActionIcon variant="subtle" size="lg" onClick={onBack} aria-label="Back">
               <TbArrowLeft size={18} />
             </ActionIcon>
@@ -183,9 +190,25 @@ export function ProjectDetailView({
           <Breadcrumbs
             items={[{ label: 'Projects', onClick: onBack }, { label: project?.name ?? projectId.slice(0, 8) }]}
           />
+          {project && (
+            <CopyButton value={project.id} timeout={1500}>
+              {({ copied, copy }) => (
+                <Tooltip label={copied ? 'ID disalin' : 'Salin project ID'}>
+                  <ActionIcon variant="subtle" size="sm" onClick={copy} color={copied ? 'teal' : 'gray'}>
+                    {copied ? <TbChecks size={14} /> : <TbCopy size={14} />}
+                  </ActionIcon>
+                </Tooltip>
+              )}
+            </CopyButton>
+          )}
         </Group>
         <Group gap="xs">
-          <Tooltip label="Refresh">
+          {detailQ.isFetching && !detailQ.isLoading && (
+            <Badge variant="dot" color="blue" size="sm">
+              Sinkronisasi…
+            </Badge>
+          )}
+          <Tooltip label="Refresh data">
             <ActionIcon variant="light" size="lg" onClick={() => detailQ.refetch()} loading={detailQ.isFetching}>
               <TbRefresh size={16} />
             </ActionIcon>
@@ -194,20 +217,58 @@ export function ProjectDetailView({
       </Group>
 
       {detailQ.isLoading ? (
-        <Card withBorder p="xl" radius="md">
-          <Group justify="center">
-            <Loader size="sm" />
-            <Text size="sm" c="dimmed">
-              Loading project…
-            </Text>
+        <Stack gap="md">
+          <Card withBorder padding="md" radius="md">
+            <Group gap="sm" align="flex-start">
+              <Skeleton height={48} width={48} radius="md" />
+              <Stack gap={6} style={{ flex: 1 }}>
+                <Skeleton height={24} width="40%" />
+                <Group gap={6}>
+                  <Skeleton height={18} width={60} radius="xl" />
+                  <Skeleton height={18} width={70} radius="xl" />
+                  <Skeleton height={18} width={50} radius="xl" />
+                </Group>
+                <Skeleton height={14} width="80%" />
+              </Stack>
+            </Group>
+          </Card>
+          <Group gap="xs">
+            {PROJECT_DETAIL_TABS.map((t) => (
+              <Skeleton key={t} height={34} width={110} radius="sm" />
+            ))}
           </Group>
-        </Card>
+          <Card withBorder padding="md" radius="md">
+            <Stack gap="sm">
+              <Skeleton height={18} width="30%" />
+              <Skeleton height={120} />
+              <Skeleton height={80} />
+            </Stack>
+          </Card>
+        </Stack>
       ) : detailQ.error ? (
-        <Alert color="red" title="Failed to load project">
-          {(detailQ.error as Error).message}
+        <Alert color="red" icon={<TbAlertTriangle size={18} />} title="Gagal memuat proyek" radius="md">
+          <Stack gap="sm">
+            <Text size="sm">{(detailQ.error as Error).message}</Text>
+            <Group>
+              <Button
+                size="xs"
+                variant="light"
+                color="red"
+                onClick={() => detailQ.refetch()}
+                leftSection={<TbRefresh size={14} />}
+              >
+                Coba lagi
+              </Button>
+              <Button size="xs" variant="subtle" onClick={onBack}>
+                Kembali
+              </Button>
+            </Group>
+          </Stack>
         </Alert>
       ) : !project ? (
-        <Alert color="yellow">Project not found.</Alert>
+        <Alert color="yellow" icon={<TbAlertTriangle size={18} />} radius="md">
+          Proyek tidak ditemukan atau kamu tidak punya akses.
+        </Alert>
       ) : (
         <>
           <ProjectHeader project={project} systemRole={systemRole} />
@@ -217,13 +278,25 @@ export function ProjectDetailView({
               <Tabs.Tab value="overview" leftSection={<TbTarget size={14} />}>
                 Overview
               </Tabs.Tab>
-              <Tabs.Tab value="tasks" leftSection={<TbListCheck size={14} />}>
+              <Tabs.Tab
+                value="tasks"
+                leftSection={<TbListCheck size={14} />}
+                rightSection={<TabCount value={tabCounts?.tasks} />}
+              >
                 Tasks
               </Tabs.Tab>
-              <Tabs.Tab value="team" leftSection={<TbUsers size={14} />}>
+              <Tabs.Tab
+                value="team"
+                leftSection={<TbUsers size={14} />}
+                rightSection={<TabCount value={tabCounts?.members} />}
+              >
                 Team
               </Tabs.Tab>
-              <Tabs.Tab value="milestones" leftSection={<TbFlag size={14} />}>
+              <Tabs.Tab
+                value="milestones"
+                leftSection={<TbFlag size={14} />}
+                rightSection={<TabCount value={tabCounts?.milestones} />}
+              >
                 Milestones
               </Tabs.Tab>
               <Tabs.Tab value="extensions" leftSection={<TbHistory size={14} />}>
@@ -280,6 +353,15 @@ export function ProjectDetailView({
         </>
       )}
     </Stack>
+  )
+}
+
+function TabCount({ value }: { value?: number }) {
+  if (value === undefined) return null
+  return (
+    <Badge size="xs" variant="light" color="gray" circle>
+      {value}
+    </Badge>
   )
 }
 

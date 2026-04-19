@@ -1,11 +1,14 @@
 import {
   ActionIcon,
+  Alert,
   Badge,
+  Box,
   Button,
   Card,
   Checkbox,
   Divider,
   Group,
+  Kbd,
   Modal,
   Progress,
   SegmentedControl,
@@ -15,10 +18,13 @@ import {
   Text,
   Textarea,
   TextInput,
+  ThemeIcon,
   Title,
   Tooltip,
+  UnstyledButton,
 } from '@mantine/core'
 import { DateInput } from '@mantine/dates'
+import { useHotkeys } from '@mantine/hooks'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import type { EChartsOption } from 'echarts'
@@ -38,6 +44,7 @@ import {
   TbPlus,
   TbRefresh,
   TbSearch,
+  TbTarget,
   TbTrash,
   TbUser,
   TbUsers,
@@ -660,8 +667,8 @@ function PortfolioStat({
       onClick={onClick}
       style={{
         cursor: clickable ? 'pointer' : 'default',
-        borderColor: active ? `var(--mantine-color-${color}-6)` : undefined,
-        backgroundColor: active ? `var(--mantine-color-${color}-0)` : undefined,
+        borderColor: active ? `var(--mantine-color-${color}-outline)` : undefined,
+        backgroundColor: active ? `var(--mantine-color-${color}-light)` : undefined,
         opacity: muted ? 0.55 : 1,
         transition: 'all 120ms ease',
       }}
@@ -831,13 +838,21 @@ function ProjectCard({
               </Tooltip>
             </Group>
             <Progress.Root size="xs" mt={2}>
-              <Progress.Section value={(p.taskStats.closed / p.taskStats.total) * 100} color="green" />
-              <Progress.Section value={(p.taskStats.readyForQc / p.taskStats.total) * 100} color="teal" />
-              <Progress.Section value={(p.taskStats.inProgress / p.taskStats.total) * 100} color="blue" />
-              <Progress.Section
-                value={((p.taskStats.open + p.taskStats.reopened) / p.taskStats.total) * 100}
-                color="gray"
-              />
+              <Tooltip label={`Closed · ${p.taskStats.closed}`}>
+                <Progress.Section value={(p.taskStats.closed / p.taskStats.total) * 100} color="green" />
+              </Tooltip>
+              <Tooltip label={`Ready for QC · ${p.taskStats.readyForQc}`}>
+                <Progress.Section value={(p.taskStats.readyForQc / p.taskStats.total) * 100} color="teal" />
+              </Tooltip>
+              <Tooltip label={`In progress · ${p.taskStats.inProgress}`}>
+                <Progress.Section value={(p.taskStats.inProgress / p.taskStats.total) * 100} color="blue" />
+              </Tooltip>
+              <Tooltip label={`Open / Reopened · ${p.taskStats.open + p.taskStats.reopened}`}>
+                <Progress.Section
+                  value={((p.taskStats.open + p.taskStats.reopened) / p.taskStats.total) * 100}
+                  color="gray"
+                />
+              </Tooltip>
             </Progress.Root>
           </div>
         )}
@@ -929,6 +944,44 @@ function CreateProjectModal({
   }
 
   const invalidRange = startsAt && endsAt && endsAt < startsAt
+  const canSubmit = !!name.trim() && !invalidRange && !loading
+
+  const durationDays =
+    startsAt && endsAt && !invalidRange
+      ? Math.max(1, Math.round((endsAt.getTime() - startsAt.getTime()) / 86_400_000))
+      : null
+  const durationLabel = durationDays
+    ? durationDays >= 30
+      ? `~${Math.round(durationDays / 30)} bulan`
+      : durationDays >= 7
+        ? `~${Math.round(durationDays / 7)} minggu`
+        : `${durationDays} hari`
+    : null
+
+  const applyDurationPreset = (days: number) => {
+    const start = startsAt ?? new Date()
+    if (!startsAt) setStartsAt(start)
+    const end = new Date(start)
+    end.setDate(end.getDate() + days)
+    setEndsAt(end)
+  }
+
+  const submit = () => {
+    if (!canSubmit) return
+    onSubmit({
+      name: name.trim(),
+      description: description.trim() || undefined,
+      status,
+      priority,
+      startsAt: startsAt ? startsAt.toISOString() : null,
+      endsAt: endsAt ? endsAt.toISOString() : null,
+    })
+  }
+
+  useHotkeys(opened ? [['mod+Enter', submit]] : [])
+
+  const descLimit = 280
+  const descLen = description.length
 
   return (
     <Modal
@@ -937,93 +990,220 @@ function CreateProjectModal({
         reset()
         onClose()
       }}
-      title="Create Project"
-      size="md"
+      title={
+        <Group gap="sm">
+          <ThemeIcon variant="light" color="blue" size="lg" radius="md">
+            <TbTarget size={18} />
+          </ThemeIcon>
+          <div>
+            <Text fw={600} size="sm">
+              Proyek Baru
+            </Text>
+            <Text size="xs" c="dimmed">
+              Buat ruang kerja baru untuk tim kamu
+            </Text>
+          </div>
+        </Group>
+      }
+      size="lg"
+      centered
+      overlayProps={{ blur: 3, opacity: 0.55 }}
+      radius="md"
     >
-      <Stack gap="sm">
-        <TextInput
-          label="Name"
-          placeholder="e.g. Acme Website Redesign"
-          value={name}
-          onChange={(e) => setName(e.currentTarget.value)}
-          required
-        />
-        <Textarea
-          label="Description"
-          placeholder="What's this project about?"
-          value={description}
-          onChange={(e) => setDescription(e.currentTarget.value)}
-          autosize
-          minRows={2}
-          maxRows={5}
-        />
-        <Group grow>
-          <Select
-            label="Status"
-            data={STATUS_OPTIONS}
-            value={status}
-            onChange={(v) => v && setStatus(v as ProjectStatus)}
+      <Stack gap="lg">
+        <Stack gap="xs">
+          <SectionLabel>Info Dasar</SectionLabel>
+          <TextInput
+            label="Nama proyek"
+            placeholder="mis. Redesign Website Acme"
+            value={name}
+            onChange={(e) => setName(e.currentTarget.value)}
+            required
+            data-autofocus
+            size="md"
           />
-          <Select
-            label="Priority"
-            data={PRIORITY_OPTIONS}
-            value={priority}
-            onChange={(v) => v && setPriority(v as ProjectPriority)}
-          />
-        </Group>
-        <Group grow>
-          <DateInput
-            label="Start date"
-            placeholder="Optional"
-            value={startsAt}
-            onChange={(v) => setStartsAt(v ? new Date(v as unknown as string) : null)}
-            clearable
-            leftSection={<TbClock size={14} />}
-          />
-          <DateInput
-            label="End date"
-            placeholder="Optional"
-            value={endsAt}
-            onChange={(v) => setEndsAt(v ? new Date(v as unknown as string) : null)}
-            clearable
-            leftSection={<TbCalendarEvent size={14} />}
-            error={invalidRange ? 'End must be after start' : undefined}
-          />
-        </Group>
-        {error ? (
-          <Text size="sm" c="red">
-            {error}
-          </Text>
-        ) : null}
-        <Group justify="flex-end">
-          <Button
-            variant="subtle"
-            onClick={() => {
-              reset()
-              onClose()
-            }}
-          >
-            Cancel
-          </Button>
-          <Button
-            onClick={() =>
-              onSubmit({
-                name: name.trim(),
-                description: description.trim() || undefined,
-                status,
-                priority,
-                startsAt: startsAt ? startsAt.toISOString() : null,
-                endsAt: endsAt ? endsAt.toISOString() : null,
-              })
+          <Textarea
+            label="Deskripsi"
+            placeholder="Tujuan utama, deliverable, atau konteks singkat"
+            value={description}
+            onChange={(e) => setDescription(e.currentTarget.value.slice(0, descLimit))}
+            autosize
+            minRows={2}
+            maxRows={5}
+            description={
+              <Group gap={6} justify="flex-end">
+                <Text size="xs" c={descLen > descLimit - 40 ? 'orange' : 'dimmed'}>
+                  {descLen}/{descLimit}
+                </Text>
+              </Group>
             }
-            disabled={!name.trim() || Boolean(invalidRange) || loading}
-            loading={loading}
-          >
-            Create
-          </Button>
+          />
+        </Stack>
+
+        <Stack gap="xs">
+          <SectionLabel>Klasifikasi</SectionLabel>
+          <Stack gap={4}>
+            <Text size="xs" c="dimmed" fw={500}>
+              Status
+            </Text>
+            <Group gap={6} wrap="wrap">
+              {STATUS_OPTIONS.map((o) => (
+                <PillButton
+                  key={o.value}
+                  active={status === o.value}
+                  color={STATUS_COLOR[o.value]}
+                  onClick={() => setStatus(o.value)}
+                >
+                  {o.label}
+                </PillButton>
+              ))}
+            </Group>
+          </Stack>
+          <Stack gap={4}>
+            <Text size="xs" c="dimmed" fw={500}>
+              Prioritas
+            </Text>
+            <Group gap={6} wrap="wrap">
+              {PRIORITY_OPTIONS.map((o) => (
+                <PillButton
+                  key={o.value}
+                  active={priority === o.value}
+                  color={PRIORITY_COLOR[o.value]}
+                  onClick={() => setPriority(o.value)}
+                >
+                  {o.label}
+                </PillButton>
+              ))}
+            </Group>
+          </Stack>
+        </Stack>
+
+        <Stack gap="xs">
+          <Group justify="space-between" align="flex-end">
+            <SectionLabel>Timeline</SectionLabel>
+            {durationLabel && (
+              <Badge variant="light" color="blue" leftSection={<TbClock size={10} />} size="sm">
+                {durationLabel}
+              </Badge>
+            )}
+          </Group>
+          <Group grow>
+            <DateInput
+              label="Mulai"
+              placeholder="Opsional"
+              value={startsAt}
+              onChange={(v) => setStartsAt(v ? new Date(v as unknown as string) : null)}
+              clearable
+              leftSection={<TbClock size={14} />}
+            />
+            <DateInput
+              label="Selesai"
+              placeholder="Opsional"
+              value={endsAt}
+              onChange={(v) => setEndsAt(v ? new Date(v as unknown as string) : null)}
+              clearable
+              leftSection={<TbCalendarEvent size={14} />}
+              error={invalidRange ? 'Tanggal selesai harus setelah mulai' : undefined}
+              minDate={startsAt ?? undefined}
+            />
+          </Group>
+          <Group gap={6} wrap="wrap">
+            <Text size="xs" c="dimmed">
+              Cepat:
+            </Text>
+            {[
+              { label: '1 minggu', days: 7 },
+              { label: '2 minggu', days: 14 },
+              { label: '1 bulan', days: 30 },
+              { label: '3 bulan', days: 90 },
+            ].map((p) => (
+              <UnstyledButton
+                key={p.days}
+                onClick={() => applyDurationPreset(p.days)}
+                style={{
+                  fontSize: 11,
+                  padding: '2px 8px',
+                  borderRadius: 4,
+                  border: '1px solid var(--mantine-color-default-border)',
+                  color: 'var(--mantine-color-dimmed)',
+                }}
+              >
+                {p.label}
+              </UnstyledButton>
+            ))}
+          </Group>
+        </Stack>
+
+        {error && (
+          <Alert color="red" variant="light" icon={<TbAlertTriangle size={16} />} radius="md">
+            {error}
+          </Alert>
+        )}
+
+        <Divider />
+
+        <Group justify="space-between">
+          <Text size="xs" c="dimmed">
+            Tekan <Kbd>⌘</Kbd> + <Kbd>Enter</Kbd> untuk menyimpan
+          </Text>
+          <Group gap="xs">
+            <Button
+              variant="subtle"
+              onClick={() => {
+                reset()
+                onClose()
+              }}
+            >
+              Batal
+            </Button>
+            <Button onClick={submit} disabled={!canSubmit} loading={loading} leftSection={<TbPlus size={16} />}>
+              Buat Proyek
+            </Button>
+          </Group>
         </Group>
       </Stack>
     </Modal>
+  )
+}
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <Text size="xs" tt="uppercase" fw={700} c="dimmed" style={{ letterSpacing: 0.6 }}>
+      {children}
+    </Text>
+  )
+}
+
+function PillButton({
+  active,
+  color,
+  onClick,
+  children,
+}: {
+  active: boolean
+  color: string
+  onClick: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <UnstyledButton onClick={onClick}>
+      <Box
+        style={{
+          padding: '4px 12px',
+          borderRadius: 999,
+          fontSize: 13,
+          fontWeight: 500,
+          border: '1px solid',
+          borderColor: active ? `var(--mantine-color-${color}-filled)` : 'var(--mantine-color-default-border)',
+          backgroundColor: active ? `var(--mantine-color-${color}-filled)` : 'transparent',
+          color: active ? 'var(--mantine-color-white)' : 'var(--mantine-color-text)',
+          transition: 'all 0.15s',
+          cursor: 'pointer',
+        }}
+      >
+        {children}
+      </Box>
+    </UnstyledButton>
   )
 }
 

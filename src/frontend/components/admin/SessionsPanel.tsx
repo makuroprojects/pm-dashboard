@@ -2,7 +2,6 @@ import {
   ActionIcon,
   Badge,
   Card,
-  Container,
   Group,
   Pagination,
   SegmentedControl,
@@ -19,6 +18,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useEffect, useMemo, useState } from 'react'
 import { TbActivity, TbClock, TbDevices, TbRefresh, TbSearch, type TbUsers, TbWifi } from 'react-icons/tb'
 import { EmptyRow } from '@/frontend/components/shared/EmptyState'
+import { InfoTip } from '@/frontend/components/shared/InfoTip'
 
 const PAGE_SIZE = 25
 
@@ -123,39 +123,74 @@ export function SessionsPanel() {
   }, [search, statusFilter, roleFilter])
 
   return (
-    <Container size="xl" px={0}>
-      <Stack gap="lg">
-        <Group justify="space-between">
-          <div>
+    <Stack gap="lg">
+      <Group justify="space-between">
+        <div>
+          <Group gap="xs">
             <Title order={3}>Active Sessions</Title>
-            <Text size="sm" c="dimmed">
-              Login sessions aktif lintas user. Auto-refresh 15 detik.
-            </Text>
-          </div>
-          <Tooltip label="Refresh">
-            <ActionIcon variant="subtle" onClick={() => refetch()} loading={isFetching}>
-              <TbRefresh size={16} />
-            </ActionIcon>
-          </Tooltip>
-        </Group>
-
-        <SimpleGrid cols={{ base: 2, md: 4 }} spacing="md">
-          <StatCard label="Total Sessions" value={summary?.totalSessions ?? 0} icon={TbDevices} color="blue" />
-          <StatCard label="Active" value={summary?.activeSessions ?? 0} icon={TbActivity} color="teal" />
-          <StatCard label="Online Users" value={summary?.onlineUsers ?? 0} icon={TbWifi} color="green" />
-          <StatCard label="Expired" value={summary?.expiredSessions ?? 0} icon={TbClock} color="gray" />
-        </SimpleGrid>
-
-        <Card withBorder padding="sm" radius="md">
-          <Group gap="sm" wrap="wrap">
-            <TextInput
-              placeholder="Cari nama atau email"
-              leftSection={<TbSearch size={12} />}
-              value={search}
-              onChange={(e) => setSearch(e.currentTarget.value)}
-              size="xs"
-              w={260}
+            <InfoTip
+              width={360}
+              label="Login session dari tabel Session. Satu user bisa punya banyak session (mis. browser + hape). Session auto-expired sesuai expiresAt; user harus login ulang. Polling 15 detik."
             />
+          </Group>
+          <Text size="sm" c="dimmed">
+            Login sessions aktif lintas user. Auto-refresh 15 detik.
+          </Text>
+        </div>
+        <Tooltip label="Refresh">
+          <ActionIcon variant="subtle" onClick={() => refetch()} loading={isFetching}>
+            <TbRefresh size={16} />
+          </ActionIcon>
+        </Tooltip>
+      </Group>
+
+      <SimpleGrid cols={{ base: 2, md: 4 }} spacing="md">
+        <StatCard
+          label="Total Sessions"
+          value={summary?.totalSessions ?? 0}
+          icon={TbDevices}
+          color="blue"
+          tip="Jumlah seluruh row Session di DB (active + expired yang belum di-cleanup)."
+        />
+        <StatCard
+          label="Active"
+          value={summary?.activeSessions ?? 0}
+          icon={TbActivity}
+          color="teal"
+          tip="Session dengan expiresAt > sekarang. User masih logged-in — bisa refresh page tanpa login ulang."
+        />
+        <StatCard
+          label="Online Users"
+          value={summary?.onlineUsers ?? 0}
+          icon={TbWifi}
+          color="green"
+          tip="User unik yang sedang terhubung via WebSocket /ws/presence. Real-time indicator — lagi aktif buka app."
+        />
+        <StatCard
+          label="Expired"
+          value={summary?.expiredSessions ?? 0}
+          icon={TbClock}
+          color="gray"
+          tip="Session dengan expiresAt ≤ sekarang. User perlu login ulang. Row akan dihapus otomatis saat user coba pakai sessionnya."
+        />
+      </SimpleGrid>
+
+      <Card withBorder padding="sm" radius="md">
+        <Group gap="sm" wrap="wrap">
+          <TextInput
+            placeholder="Cari nama atau email"
+            leftSection={<TbSearch size={12} />}
+            value={search}
+            onChange={(e) => setSearch(e.currentTarget.value)}
+            size="xs"
+            w={260}
+          />
+          <Tooltip
+            multiline
+            w={300}
+            withArrow
+            label="Active = belum expired. Online = terkoneksi WebSocket (subset Active). Expired = sudah lewat expiresAt."
+          >
             <SegmentedControl
               size="xs"
               value={statusFilter}
@@ -167,137 +202,136 @@ export function SessionsPanel() {
                 { label: 'Expired', value: 'expired' },
               ]}
             />
-            <Group gap="xs">
-              <Text size="xs" c="dimmed">
-                Role:
-              </Text>
+          </Tooltip>
+          <Group gap="xs">
+            <Text size="xs" c="dimmed">
+              Role:
+            </Text>
+            <Badge
+              variant={roleFilter === null ? 'filled' : 'light'}
+              color="gray"
+              size="sm"
+              style={{ cursor: 'pointer' }}
+              onClick={() => setRoleFilter(null)}
+            >
+              All
+            </Badge>
+            {roleOptions.map((r) => (
               <Badge
-                variant={roleFilter === null ? 'filled' : 'light'}
-                color="gray"
+                key={r}
+                variant={roleFilter === r ? 'filled' : 'light'}
+                color={ROLE_COLOR[r] ?? 'gray'}
                 size="sm"
                 style={{ cursor: 'pointer' }}
-                onClick={() => setRoleFilter(null)}
+                onClick={() => setRoleFilter(roleFilter === r ? null : r)}
               >
-                All
+                {r} ({summary?.byRole[r] ?? 0})
               </Badge>
-              {roleOptions.map((r) => (
-                <Badge
-                  key={r}
-                  variant={roleFilter === r ? 'filled' : 'light'}
-                  color={ROLE_COLOR[r] ?? 'gray'}
-                  size="sm"
-                  style={{ cursor: 'pointer' }}
-                  onClick={() => setRoleFilter(roleFilter === r ? null : r)}
-                >
-                  {r} ({summary?.byRole[r] ?? 0})
-                </Badge>
-              ))}
-            </Group>
-            <Badge variant="light" size="sm" ml="auto">
-              {filtered.length} of {sessions.length}
-            </Badge>
+            ))}
           </Group>
-        </Card>
+          <Badge variant="light" size="sm" ml="auto">
+            {filtered.length} of {sessions.length}
+          </Badge>
+        </Group>
+      </Card>
 
-        <Card withBorder padding={0} radius="md">
-          <Table highlightOnHover verticalSpacing="sm" horizontalSpacing="md">
-            <Table.Thead>
+      <Card withBorder padding={0} radius="md">
+        <Table highlightOnHover verticalSpacing="sm" horizontalSpacing="md">
+          <Table.Thead>
+            <Table.Tr>
+              <Table.Th>User</Table.Th>
+              <Table.Th>Role</Table.Th>
+              <Table.Th>Status</Table.Th>
+              <Table.Th>Started</Table.Th>
+              <Table.Th>Expires</Table.Th>
+            </Table.Tr>
+          </Table.Thead>
+          <Table.Tbody>
+            {isLoading && (
               <Table.Tr>
-                <Table.Th>User</Table.Th>
-                <Table.Th>Role</Table.Th>
-                <Table.Th>Status</Table.Th>
-                <Table.Th>Started</Table.Th>
-                <Table.Th>Expires</Table.Th>
+                <Table.Td colSpan={5}>
+                  <EmptyRow icon={TbDevices} title="Memuat session…" />
+                </Table.Td>
               </Table.Tr>
-            </Table.Thead>
-            <Table.Tbody>
-              {isLoading && (
-                <Table.Tr>
-                  <Table.Td colSpan={5}>
-                    <EmptyRow icon={TbDevices} title="Memuat session…" />
-                  </Table.Td>
-                </Table.Tr>
-              )}
-              {!isLoading && filtered.length === 0 && (
-                <Table.Tr>
-                  <Table.Td colSpan={5}>
-                    <EmptyRow
-                      icon={TbSearch}
-                      title="Tidak ada session yang cocok"
-                      message="Coba ubah filter atau reset pencarian."
-                    />
-                  </Table.Td>
-                </Table.Tr>
-              )}
-              {pagedFiltered.map((s) => (
-                <Table.Tr key={s.id} opacity={s.isExpired ? 0.5 : 1}>
-                  <Table.Td>
-                    <Stack gap={2}>
-                      <Text size="sm" fw={500}>
-                        {s.userName}
-                      </Text>
-                      <Text size="xs" c="dimmed">
-                        {s.userEmail}
-                      </Text>
-                    </Stack>
-                  </Table.Td>
-                  <Table.Td>
-                    <Badge color={ROLE_COLOR[s.userRole] ?? 'gray'} variant="light" size="sm">
-                      {s.userRole}
-                    </Badge>
-                  </Table.Td>
-                  <Table.Td>
-                    <Group gap={6} wrap="nowrap">
-                      {s.userBlocked && (
-                        <Badge color="red" variant="filled" size="xs">
-                          Blocked
-                        </Badge>
-                      )}
-                      {s.isExpired ? (
-                        <Badge color="gray" variant="light" size="xs">
-                          Expired
-                        </Badge>
-                      ) : s.isOnline ? (
-                        <Badge color="green" variant="filled" size="xs">
-                          Online
-                        </Badge>
-                      ) : (
-                        <Badge color="blue" variant="light" size="xs">
-                          Active
-                        </Badge>
-                      )}
-                    </Group>
-                  </Table.Td>
-                  <Table.Td>
-                    <Tooltip label={formatDateTime(s.createdAt)}>
-                      <Text size="xs" c="dimmed">
-                        {formatRelative(s.createdAt)}
-                      </Text>
-                    </Tooltip>
-                  </Table.Td>
-                  <Table.Td>
-                    <Tooltip label={formatDateTime(s.expiresAt)}>
-                      <Text size="xs" c={s.isExpired ? 'red' : 'dimmed'}>
-                        {formatRelative(s.expiresAt)}
-                      </Text>
-                    </Tooltip>
-                  </Table.Td>
-                </Table.Tr>
-              ))}
-            </Table.Tbody>
-          </Table>
-          {filtered.length > PAGE_SIZE && (
-            <Group justify="space-between" p="md">
-              <Text size="xs" c="dimmed">
-                {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, filtered.length)} dari{' '}
-                {filtered.length}
-              </Text>
-              <Pagination value={safePage} onChange={setPage} total={totalPages} size="sm" />
-            </Group>
-          )}
-        </Card>
-      </Stack>
-    </Container>
+            )}
+            {!isLoading && filtered.length === 0 && (
+              <Table.Tr>
+                <Table.Td colSpan={5}>
+                  <EmptyRow
+                    icon={TbSearch}
+                    title="Tidak ada session yang cocok"
+                    message="Coba ubah filter atau reset pencarian."
+                  />
+                </Table.Td>
+              </Table.Tr>
+            )}
+            {pagedFiltered.map((s) => (
+              <Table.Tr key={s.id} opacity={s.isExpired ? 0.5 : 1}>
+                <Table.Td>
+                  <Stack gap={2}>
+                    <Text size="sm" fw={500}>
+                      {s.userName}
+                    </Text>
+                    <Text size="xs" c="dimmed">
+                      {s.userEmail}
+                    </Text>
+                  </Stack>
+                </Table.Td>
+                <Table.Td>
+                  <Badge color={ROLE_COLOR[s.userRole] ?? 'gray'} variant="light" size="sm">
+                    {s.userRole}
+                  </Badge>
+                </Table.Td>
+                <Table.Td>
+                  <Group gap={6} wrap="nowrap">
+                    {s.userBlocked && (
+                      <Badge color="red" variant="filled" size="xs">
+                        Blocked
+                      </Badge>
+                    )}
+                    {s.isExpired ? (
+                      <Badge color="gray" variant="light" size="xs">
+                        Expired
+                      </Badge>
+                    ) : s.isOnline ? (
+                      <Badge color="green" variant="filled" size="xs">
+                        Online
+                      </Badge>
+                    ) : (
+                      <Badge color="blue" variant="light" size="xs">
+                        Active
+                      </Badge>
+                    )}
+                  </Group>
+                </Table.Td>
+                <Table.Td>
+                  <Tooltip label={formatDateTime(s.createdAt)}>
+                    <Text size="xs" c="dimmed">
+                      {formatRelative(s.createdAt)}
+                    </Text>
+                  </Tooltip>
+                </Table.Td>
+                <Table.Td>
+                  <Tooltip label={formatDateTime(s.expiresAt)}>
+                    <Text size="xs" c={s.isExpired ? 'red' : 'dimmed'}>
+                      {formatRelative(s.expiresAt)}
+                    </Text>
+                  </Tooltip>
+                </Table.Td>
+              </Table.Tr>
+            ))}
+          </Table.Tbody>
+        </Table>
+        {filtered.length > PAGE_SIZE && (
+          <Group justify="space-between" p="md">
+            <Text size="xs" c="dimmed">
+              {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, filtered.length)} dari {filtered.length}
+            </Text>
+            <Pagination value={safePage} onChange={setPage} total={totalPages} size="sm" />
+          </Group>
+        )}
+      </Card>
+    </Stack>
   )
 }
 
@@ -306,19 +340,24 @@ function StatCard({
   value,
   icon: Icon,
   color,
+  tip,
 }: {
   label: string
   value: number
   icon: typeof TbUsers
   color: string
+  tip?: string
 }) {
   return (
     <Card withBorder padding="lg" radius="md">
       <Group justify="space-between" align="flex-start">
-        <div>
-          <Text size="xs" c="dimmed" fw={500} tt="uppercase">
-            {label}
-          </Text>
+        <div style={{ flex: 1 }}>
+          <Group gap={4} wrap="nowrap">
+            <Text size="xs" c="dimmed" fw={500} tt="uppercase">
+              {label}
+            </Text>
+            {tip && <InfoTip label={tip} size={12} />}
+          </Group>
           <Text fw={700} size="xl">
             {value}
           </Text>

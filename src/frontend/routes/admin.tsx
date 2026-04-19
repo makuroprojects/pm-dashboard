@@ -3,7 +3,6 @@ import {
   AppShell,
   Badge,
   Burger,
-  Button,
   Container,
   Group,
   NavLink,
@@ -16,22 +15,17 @@ import {
 import { useDisclosure, useMediaQuery } from '@mantine/hooks'
 import { modals } from '@mantine/modals'
 import { createFileRoute, redirect, useNavigate } from '@tanstack/react-router'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   TbClipboardList,
   TbClockHour3,
-  TbCode,
   TbHeartbeat,
   TbLayoutDashboard,
-  TbLayoutSidebarLeftCollapse,
-  TbLayoutSidebarLeftExpand,
   TbListCheck,
-  TbLogout,
   TbPlugConnected,
   TbReportAnalytics,
   TbShieldLock,
   TbTarget,
-  TbUser,
   TbUsers,
 } from 'react-icons/tb'
 import { AnalyticsPanel } from '@/frontend/components/admin/AnalyticsPanel'
@@ -44,8 +38,9 @@ import { SystemHealthPanel } from '@/frontend/components/admin/SystemHealthPanel
 import { TaskTriagePanel } from '@/frontend/components/admin/TaskTriagePanel'
 import { UsersPanel } from '@/frontend/components/admin/UsersPanel'
 import { NotificationBell } from '@/frontend/components/NotificationBell'
+import { SidebarAppSwitcher } from '@/frontend/components/SidebarAppSwitcher'
+import { SidebarUserFooter } from '@/frontend/components/SidebarUserFooter'
 import { SectionErrorBoundary } from '@/frontend/components/shared/SectionErrorBoundary'
-import { ThemeToggle } from '@/frontend/components/ThemeToggle'
 import { useLogout, useSession } from '@/frontend/hooks/useAuth'
 import { useNavBadges } from '@/frontend/hooks/useNavBadges'
 
@@ -120,6 +115,45 @@ const navGroups: NavGroup[] = [
   },
 ]
 
+const TAB_META: Record<TabKey, { label: string; description: string }> = {
+  overview: {
+    label: 'Ringkasan',
+    description: 'Red flags, kesehatan portfolio, beban tim, dan KPI sistem.',
+  },
+  users: {
+    label: 'Pengguna',
+    description: 'Kelola role dan status akses anggota sistem.',
+  },
+  'audit-logs': {
+    label: 'Log Audit',
+    description: 'Jejak aktivitas login, perubahan role, dan aksi admin.',
+  },
+  projects: {
+    label: 'Proyek',
+    description: 'Pantau status, kesehatan, dan deadline setiap proyek.',
+  },
+  tasks: {
+    label: 'Triase Task',
+    description: 'Task overdue, tanpa assignee, terblokir, atau stale.',
+  },
+  effort: {
+    label: 'Effort',
+    description: 'Estimasi vs aktual, ghost task, dan phantom work per user.',
+  },
+  analytics: {
+    label: 'Analitik',
+    description: 'Throughput, cycle time, WIP, dan timeline proyek.',
+  },
+  sessions: {
+    label: 'Sesi',
+    description: 'Sesi login aktif dan status online lintas user.',
+  },
+  health: {
+    label: 'Kesehatan Sistem',
+    description: 'Env vars, agents, webhook, dan retensi log.',
+  },
+}
+
 function AdminPage() {
   const { data } = useSession()
   const logout = useLogout()
@@ -128,10 +162,19 @@ function AdminPage() {
   const navigate = useNavigate()
   const [mobileOpened, { toggle: toggleMobile, close: closeMobile }] = useDisclosure(false)
   const isMobile = useMediaQuery('(max-width: 48em)')
+  const scrollPositions = useRef<Partial<Record<TabKey, number>>>({})
+  const previousTab = useRef<TabKey>(active)
   const setActive = (key: TabKey) => {
+    scrollPositions.current[previousTab.current] = window.scrollY
     navigate({ to: '/admin', search: { tab: key } })
     closeMobile()
   }
+  useEffect(() => {
+    if (previousTab.current === active) return
+    previousTab.current = active
+    const saved = scrollPositions.current[active] ?? 0
+    window.scrollTo({ top: saved, behavior: 'auto' })
+  }, [active])
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('admin:sidebar') === 'collapsed')
   const toggleSidebar = () => {
     setCollapsed((prev) => {
@@ -150,7 +193,6 @@ function AdminPage() {
     })
 
   const desktopWidth = collapsed ? 60 : 260
-  const isSuper = user?.role === 'SUPER_ADMIN'
   const badges = useNavBadges(true)
 
   return (
@@ -247,114 +289,43 @@ function AdminPage() {
               })}
             </Stack>
           ))}
+
+          <SidebarAppSwitcher current="admin" role={user?.role} collapsed={collapsed && !isMobile} />
         </Stack>
 
-        <Stack gap="xs">
-          {!collapsed || isMobile ? (
-            <>
-              <Button
-                variant="light"
-                color="blue"
-                leftSection={<TbTarget size={16} />}
-                onClick={() => navigate({ to: '/pm', search: { tab: 'overview' } })}
-                size="sm"
-              >
-                Manajer Proyek
-              </Button>
-              {isSuper && (
-                <Button
-                  variant="light"
-                  color="orange"
-                  leftSection={<TbCode size={16} />}
-                  onClick={() => navigate({ to: '/dev', search: { tab: 'overview' } })}
-                  size="sm"
-                >
-                  Konsol Dev
-                </Button>
-              )}
-              <Button
-                variant="light"
-                leftSection={<TbUser size={16} />}
-                onClick={() => navigate({ to: '/settings' })}
-                size="sm"
-              >
-                Pengaturan
-              </Button>
-              <Group justify="space-between">
-                <ThemeToggle size="sm" />
-                <ActionIcon variant="subtle" onClick={toggleSidebar} visibleFrom="sm" size="lg">
-                  <TbLayoutSidebarLeftCollapse size={18} />
-                </ActionIcon>
-              </Group>
-              <Button
-                variant="light"
-                color="red"
-                leftSection={<TbLogout size={16} />}
-                onClick={confirmLogout}
-                loading={logout.isPending}
-                size="sm"
-              >
-                Keluar
-              </Button>
-            </>
-          ) : (
-            <Stack gap="xs" align="center">
-              <Tooltip label="Manajer Proyek" position="right" withArrow>
-                <ActionIcon
-                  variant="light"
-                  color="blue"
-                  size="lg"
-                  onClick={() => navigate({ to: '/pm', search: { tab: 'overview' } })}
-                >
-                  <TbTarget size={18} />
-                </ActionIcon>
-              </Tooltip>
-              {isSuper && (
-                <Tooltip label="Konsol Dev" position="right" withArrow>
-                  <ActionIcon
-                    variant="light"
-                    color="orange"
-                    size="lg"
-                    onClick={() => navigate({ to: '/dev', search: { tab: 'overview' } })}
-                  >
-                    <TbCode size={18} />
-                  </ActionIcon>
-                </Tooltip>
-              )}
-              <Tooltip label="Pengaturan" position="right" withArrow>
-                <ActionIcon variant="subtle" size="lg" onClick={() => navigate({ to: '/settings' })}>
-                  <TbUser size={18} />
-                </ActionIcon>
-              </Tooltip>
-              <ThemeToggle size="sm" />
-              <Tooltip label="Perluas sidebar" position="right" withArrow>
-                <ActionIcon variant="subtle" onClick={toggleSidebar} size="lg">
-                  <TbLayoutSidebarLeftExpand size={18} />
-                </ActionIcon>
-              </Tooltip>
-              <Tooltip label="Keluar" position="right" withArrow>
-                <ActionIcon variant="light" color="red" size="lg" onClick={confirmLogout} loading={logout.isPending}>
-                  <TbLogout size={18} />
-                </ActionIcon>
-              </Tooltip>
-            </Stack>
-          )}
-        </Stack>
+        <SidebarUserFooter
+          user={user}
+          collapsed={collapsed && !isMobile}
+          onToggleCollapse={toggleSidebar}
+          onLogout={confirmLogout}
+          isLoggingOut={logout.isPending}
+          accentColor="violet"
+        />
       </AppShell.Navbar>
 
       <AppShell.Main>
-        <Container size="xl" px={0}>
-          <SectionErrorBoundary key={active} label={active}>
-            {active === 'overview' && <OverviewPanel />}
-            {active === 'users' && <UsersPanel />}
-            {active === 'audit-logs' && <AuditLogsPanel />}
-            {active === 'projects' && <ProjectsOverviewPanel />}
-            {active === 'tasks' && <TaskTriagePanel />}
-            {active === 'effort' && <EffortPanel />}
-            {active === 'analytics' && <AnalyticsPanel />}
-            {active === 'sessions' && <SessionsPanel />}
-            {active === 'health' && <SystemHealthPanel />}
-          </SectionErrorBoundary>
+        <Container fluid px={0}>
+          <Stack gap="md">
+            <div>
+              <Text size="xs" c="dimmed" tt="uppercase" fw={600} style={{ letterSpacing: 0.6 }}>
+                Admin · {TAB_META[active].label}
+              </Text>
+              <Text size="sm" c="dimmed">
+                {TAB_META[active].description}
+              </Text>
+            </div>
+            <SectionErrorBoundary key={active} label={active}>
+              {active === 'overview' && <OverviewPanel />}
+              {active === 'users' && <UsersPanel />}
+              {active === 'audit-logs' && <AuditLogsPanel />}
+              {active === 'projects' && <ProjectsOverviewPanel />}
+              {active === 'tasks' && <TaskTriagePanel />}
+              {active === 'effort' && <EffortPanel />}
+              {active === 'analytics' && <AnalyticsPanel />}
+              {active === 'sessions' && <SessionsPanel />}
+              {active === 'health' && <SystemHealthPanel />}
+            </SectionErrorBoundary>
+          </Stack>
         </Container>
       </AppShell.Main>
     </AppShell>

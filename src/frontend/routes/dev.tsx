@@ -1,9 +1,7 @@
 import {
   ActionIcon,
   AppShell,
-  Avatar,
   Badge,
-  Box,
   Burger,
   Card,
   Container,
@@ -50,10 +48,7 @@ import {
   TbFileText,
   TbKey,
   TbLayoutDashboard,
-  TbLayoutSidebarLeftCollapse,
-  TbLayoutSidebarLeftExpand,
   TbLock,
-  TbLogout,
   TbRefresh,
   TbServer,
   TbShieldCheck,
@@ -67,9 +62,10 @@ import { AgentsPanel } from '@/frontend/components/AgentsPanel'
 import { AuditLogsPanel } from '@/frontend/components/admin/AuditLogsPanel'
 import { UsersPanel } from '@/frontend/components/admin/UsersPanel'
 import { NotificationBell } from '@/frontend/components/NotificationBell'
+import { SidebarAppSwitcher } from '@/frontend/components/SidebarAppSwitcher'
+import { SidebarUserFooter } from '@/frontend/components/SidebarUserFooter'
 import { EmptyRow } from '@/frontend/components/shared/EmptyState'
 import { SectionErrorBoundary } from '@/frontend/components/shared/SectionErrorBoundary'
-import { ThemeToggle } from '@/frontend/components/ThemeToggle'
 import { WebhookMonitorPanel } from '@/frontend/components/WebhookMonitorPanel'
 import { WebhookTokensPanel } from '@/frontend/components/WebhookTokensPanel'
 import { type Role, useLogout, useSession } from '@/frontend/hooks/useAuth'
@@ -88,10 +84,50 @@ const validTabs = [
   'database',
   'project',
 ] as const
+type TabKey = (typeof validTabs)[number]
+
+const TAB_META: Record<TabKey, { label: string; description: string }> = {
+  overview: {
+    label: 'Ringkasan',
+    description: 'KPI cepat: total user, online, admin, blocked.',
+  },
+  users: {
+    label: 'Pengguna',
+    description: 'Manajemen user sistem — role, blok/unblok.',
+  },
+  agents: {
+    label: 'Agent pm-watch',
+    description: 'Approve, revoke, dan pantau liveness agent ActivityWatch.',
+  },
+  'webhook-tokens': {
+    label: 'Token Webhook',
+    description: 'DB-backed tokens untuk /webhooks/aw. Create → plaintext shown once.',
+  },
+  'webhook-monitor': {
+    label: 'Monitor Webhook',
+    description: 'Aktivitas webhook /webhooks/aw: success rate, failures, auth fails.',
+  },
+  'app-logs': {
+    label: 'Log Aplikasi',
+    description: 'Redis ring buffer log aplikasi (500 entry). Polling 5 detik.',
+  },
+  'user-logs': {
+    label: 'Log Audit',
+    description: 'Jejak aktivitas user: login, logout, perubahan role, blok.',
+  },
+  database: {
+    label: 'Database',
+    description: 'ER diagram Prisma schema — posisi node auto-save ke localStorage.',
+  },
+  project: {
+    label: 'Struktur Proyek',
+    description: 'Routes, file graph, env vars, test coverage, dependencies, migrasi.',
+  },
+}
 
 export const Route = createFileRoute('/dev')({
   validateSearch: (search: Record<string, unknown>) => ({
-    tab: validTabs.includes(search.tab as any) ? (search.tab as string) : 'overview',
+    tab: (validTabs.includes(search.tab as TabKey) ? search.tab : 'overview') as TabKey,
   }),
   beforeLoad: async ({ context }) => {
     try {
@@ -126,7 +162,7 @@ type DevBadgeKey = 'pendingAgents' | 'webhookFail24h' | 'offlineAgents'
 type DevNavItem = {
   label: string
   icon: typeof TbLayoutDashboard
-  key: string
+  key: TabKey
   badgeKey?: DevBadgeKey
   badgeColor?: string
 }
@@ -179,10 +215,19 @@ function DevPage() {
   const [mobileOpened, { toggle: toggleMobile, close: closeMobile }] = useDisclosure(false)
   const isMobile = useMediaQuery('(max-width: 48em)')
   const badges = useNavBadges(true)
-  const setActive = (key: string) => {
+  const scrollPositions = useRef<Partial<Record<TabKey, number>>>({})
+  const previousTab = useRef<TabKey>(active)
+  const setActive = (key: TabKey) => {
+    scrollPositions.current[previousTab.current] = window.scrollY
     navigate({ to: '/dev', search: { tab: key } })
     closeMobile()
   }
+  useEffect(() => {
+    if (previousTab.current === active) return
+    previousTab.current = active
+    const saved = scrollPositions.current[active] ?? 0
+    window.scrollTo({ top: saved, behavior: 'auto' })
+  }, [active])
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('dev:sidebar') === 'collapsed')
   const toggleSidebar = () => {
     setCollapsed((prev) => {
@@ -202,9 +247,9 @@ function DevPage() {
 
   return (
     <AppShell
-      header={{ height: 56, collapsed: !isMobile }}
+      header={{ height: 60 }}
       navbar={{
-        width: collapsed ? 60 : 260,
+        width: collapsed && !isMobile ? 60 : 260,
         breakpoint: 'sm',
         collapsed: { mobile: !mobileOpened },
       }}
@@ -214,79 +259,52 @@ function DevPage() {
         header: { backgroundColor: 'var(--app-navbar-bg)' },
       }}
     >
-      <AppShell.Header px="md" hiddenFrom="sm">
-        <Group h="100%" justify="space-between">
+      <AppShell.Header>
+        <Group h="100%" px="md" justify="space-between">
           <Group gap="xs">
-            <Burger opened={mobileOpened} onClick={toggleMobile} size="sm" />
+            <Burger opened={mobileOpened} onClick={toggleMobile} hiddenFrom="sm" size="sm" />
             <ThemeIcon size="md" variant="gradient" gradient={{ from: 'red', to: 'orange' }}>
-              <TbCode size={16} />
+              <TbCode size={18} />
             </ThemeIcon>
-            <Text fw={700} size="sm">
-              Konsol Dev
+            <Title order={4}>Konsol Dev</Title>
+          </Group>
+          <Group gap="xs">
+            <NotificationBell size="md" />
+            <Badge color="red" variant="light" size="sm">
+              {user?.role}
+            </Badge>
+            <Text size="sm" visibleFrom="sm" c="dimmed">
+              {user?.email}
             </Text>
           </Group>
-          <NotificationBell size="md" />
         </Group>
       </AppShell.Header>
-      <AppShell.Navbar p={collapsed ? 'xs' : 'md'}>
-        <AppShell.Section>
-          <Group gap="xs" mb="md" justify={collapsed ? 'center' : 'space-between'}>
-            {collapsed ? (
-              <Tooltip label="Perluas sidebar" position="right">
-                <ActionIcon variant="subtle" color="gray" size="lg" onClick={toggleSidebar}>
-                  <TbLayoutSidebarLeftExpand size={18} />
-                </ActionIcon>
-              </Tooltip>
-            ) : (
-              <>
-                <Group gap="xs">
-                  <ThemeIcon size="lg" variant="gradient" gradient={{ from: 'red', to: 'orange' }}>
-                    <TbCode size={18} />
-                  </ThemeIcon>
-                  <div>
-                    <Text fw={700} size="sm">
-                      Konsol Dev
-                    </Text>
-                    <Text size="xs" c="dimmed">
-                      Super Admin
-                    </Text>
-                  </div>
-                </Group>
-                <Tooltip label="Ciutkan sidebar">
-                  <ActionIcon variant="subtle" color="gray" size="sm" onClick={toggleSidebar}>
-                    <TbLayoutSidebarLeftCollapse size={18} />
-                  </ActionIcon>
-                </Tooltip>
-              </>
-            )}
-          </Group>
-        </AppShell.Section>
 
-        <AppShell.Section grow style={{ overflowY: 'auto' }}>
+      <AppShell.Navbar p={collapsed && !isMobile ? 'xs' : 'md'}>
+        <Stack gap={collapsed && !isMobile ? 'xs' : 'md'} style={{ flex: 1, overflowY: 'auto' }}>
           {navGroups.map((group) => (
-            <Stack key={group.label} gap={4} mb="sm">
-              {!collapsed && (
+            <Stack key={group.label} gap={4}>
+              {!(collapsed && !isMobile) && (
                 <Text size="xs" fw={700} c="dimmed" tt="uppercase" style={{ letterSpacing: 0.6 }} px="xs" pt={4}>
                   {group.label}
                 </Text>
               )}
               {group.items.map((item) => {
                 const badgeCount = item.badgeKey ? badges[item.badgeKey] : 0
-                if (collapsed) {
+                if (collapsed && !isMobile) {
                   return (
                     <Tooltip
                       key={item.key}
                       label={badgeCount > 0 ? `${item.label} (${badgeCount})` : item.label}
                       position="right"
+                      withArrow
                     >
                       <div style={{ position: 'relative' }}>
                         <ActionIcon
-                          variant={active === item.key ? 'light' : 'subtle'}
-                          color={active === item.key ? 'blue' : 'gray'}
+                          variant={active === item.key ? 'filled' : 'subtle'}
+                          color={active === item.key ? 'red' : 'gray'}
                           size="lg"
                           onClick={() => setActive(item.key)}
-                          mb={4}
-                          style={{ width: '100%' }}
                         >
                           <item.icon size={18} />
                         </ActionIcon>
@@ -318,94 +336,52 @@ function DevPage() {
                         <TbChevronRight size={14} />
                       )
                     }
+                    color="red"
                     active={active === item.key}
                     onClick={() => setActive(item.key)}
-                    variant="light"
-                    mb={4}
                   />
                 )
               })}
             </Stack>
           ))}
-        </AppShell.Section>
 
-        <AppShell.Section>
-          <Box p={collapsed ? 'xs' : 'sm'} style={{ borderTop: '1px solid var(--mantine-color-default-border)' }}>
-            {collapsed ? (
-              <Stack align="center" gap={4}>
-                <Tooltip label={user?.name} position="right">
-                  <Avatar color="red" radius="xl" size="sm">
-                    {user?.name?.charAt(0).toUpperCase()}
-                  </Avatar>
-                </Tooltip>
-                <Tooltip label="Ke Admin" position="right">
-                  <ActionIcon
-                    variant="subtle"
-                    color="violet"
-                    size="sm"
-                    onClick={() => navigate({ to: '/admin', search: { tab: 'overview' } })}
-                  >
-                    <TbShieldCheck size={14} />
-                  </ActionIcon>
-                </Tooltip>
-                <ThemeToggle size="sm" />
-                <Tooltip label="Keluar" position="right">
-                  <ActionIcon variant="subtle" color="red" size="sm" onClick={confirmLogout} loading={logout.isPending}>
-                    <TbLogout size={14} />
-                  </ActionIcon>
-                </Tooltip>
-              </Stack>
-            ) : (
-              <Group justify="space-between">
-                <Group gap="xs">
-                  <Avatar color="red" radius="xl" size="sm">
-                    {user?.name?.charAt(0).toUpperCase()}
-                  </Avatar>
-                  <div>
-                    <Text size="xs" fw={500}>
-                      {user?.name}
-                    </Text>
-                    <Text size="xs" c="dimmed">
-                      {user?.email}
-                    </Text>
-                  </div>
-                </Group>
-                <Group gap={4}>
-                  <Tooltip label="Ke Admin">
-                    <ActionIcon
-                      variant="subtle"
-                      color="violet"
-                      onClick={() => navigate({ to: '/admin', search: { tab: 'overview' } })}
-                    >
-                      <TbShieldCheck size={16} />
-                    </ActionIcon>
-                  </Tooltip>
-                  <NotificationBell size="md" />
-                  <ThemeToggle size="sm" />
-                  <Tooltip label="Keluar">
-                    <ActionIcon variant="subtle" color="red" onClick={confirmLogout} loading={logout.isPending}>
-                      <TbLogout size={16} />
-                    </ActionIcon>
-                  </Tooltip>
-                </Group>
-              </Group>
-            )}
-          </Box>
-        </AppShell.Section>
+          <SidebarAppSwitcher current="dev" role={user?.role} collapsed={collapsed && !isMobile} />
+        </Stack>
+
+        <SidebarUserFooter
+          user={user}
+          collapsed={collapsed && !isMobile}
+          onToggleCollapse={toggleSidebar}
+          onLogout={confirmLogout}
+          isLoggingOut={logout.isPending}
+          accentColor="red"
+        />
       </AppShell.Navbar>
 
       <AppShell.Main>
-        <SectionErrorBoundary key={active} label={active}>
-          {active === 'overview' && <OverviewPanel />}
-          {active === 'users' && <UsersPanel />}
-          {active === 'agents' && <AgentsPanel />}
-          {active === 'webhook-tokens' && <WebhookTokensPanel />}
-          {active === 'webhook-monitor' && <WebhookMonitorPanel />}
-          {active === 'app-logs' && <AppLogsPanel />}
-          {active === 'user-logs' && <AuditLogsPanel />}
-          {active === 'database' && <DatabasePanel />}
-          {active === 'project' && <ProjectPanel />}
-        </SectionErrorBoundary>
+        <Container fluid px={0}>
+          <Stack gap="md">
+            <div>
+              <Text size="xs" c="dimmed" tt="uppercase" fw={600} style={{ letterSpacing: 0.6 }}>
+                Dev · {TAB_META[active].label}
+              </Text>
+              <Text size="sm" c="dimmed">
+                {TAB_META[active].description}
+              </Text>
+            </div>
+            <SectionErrorBoundary key={active} label={active}>
+              {active === 'overview' && <OverviewPanel />}
+              {active === 'users' && <UsersPanel />}
+              {active === 'agents' && <AgentsPanel />}
+              {active === 'webhook-tokens' && <WebhookTokensPanel />}
+              {active === 'webhook-monitor' && <WebhookMonitorPanel />}
+              {active === 'app-logs' && <AppLogsPanel />}
+              {active === 'user-logs' && <AuditLogsPanel />}
+              {active === 'database' && <DatabasePanel />}
+              {active === 'project' && <ProjectPanel />}
+            </SectionErrorBoundary>
+          </Stack>
+        </Container>
       </AppShell.Main>
     </AppShell>
   )
@@ -437,28 +413,26 @@ function OverviewPanel() {
   }
 
   return (
-    <Container size="lg">
-      <Stack gap="lg">
-        <Title order={3}>Overview</Title>
-        <SimpleGrid cols={{ base: 1, sm: 4 }}>
-          {overviewStats.map((stat) => (
-            <Card key={stat.title} withBorder padding="lg" radius="md">
-              <Group justify="space-between" mb="xs">
-                <Text size="sm" c="dimmed" fw={500}>
-                  {stat.title}
-                </Text>
-                <ThemeIcon variant="light" color={stat.color} size="sm">
-                  <stat.icon size={14} />
-                </ThemeIcon>
-              </Group>
-              <Text fw={700} size="xl">
-                {counts[stat.title as keyof typeof counts]}
+    <Stack gap="lg">
+      <Title order={3}>Overview</Title>
+      <SimpleGrid cols={{ base: 1, sm: 4 }}>
+        {overviewStats.map((stat) => (
+          <Card key={stat.title} withBorder padding="lg" radius="md">
+            <Group justify="space-between" mb="xs">
+              <Text size="sm" c="dimmed" fw={500}>
+                {stat.title}
               </Text>
-            </Card>
-          ))}
-        </SimpleGrid>
-      </Stack>
-    </Container>
+              <ThemeIcon variant="light" color={stat.color} size="sm">
+                <stat.icon size={14} />
+              </ThemeIcon>
+            </Group>
+            <Text fw={700} size="xl">
+              {counts[stat.title as keyof typeof counts]}
+            </Text>
+          </Card>
+        ))}
+      </SimpleGrid>
+    </Stack>
   )
 }
 
@@ -516,117 +490,115 @@ function AppLogsPanel() {
   }, [])
 
   return (
-    <Container size="lg">
-      <Stack gap="lg">
-        <Group justify="space-between">
-          <Group gap="sm">
-            <Title order={3}>App Logs</Title>
-            <Badge variant="light" color="gray" size="sm">
-              redis
-            </Badge>
-          </Group>
-          <Group gap="sm">
-            <SegmentedControl
-              size="xs"
-              value={levelFilter}
-              onChange={setLevelFilter}
-              data={[
-                { label: 'All', value: 'all' },
-                { label: 'Info', value: 'info' },
-                { label: 'Warn', value: 'warn' },
-                { label: 'Error', value: 'error' },
-              ]}
-            />
-            <Tooltip label="Clear all">
-              <ActionIcon
-                variant="subtle"
-                color="red"
-                onClick={() => {
-                  if (confirm('Hapus semua app logs?')) clearLogs.mutate()
-                }}
-                loading={clearLogs.isPending}
-              >
-                <TbTrash size={16} />
-              </ActionIcon>
-            </Tooltip>
-            <Tooltip label="Refresh">
-              <ActionIcon variant="subtle" color="gray" onClick={() => refetch()} loading={isFetching}>
-                <TbRefresh size={16} />
-              </ActionIcon>
-            </Tooltip>
-          </Group>
+    <Stack gap="lg">
+      <Group justify="space-between">
+        <Group gap="sm">
+          <Title order={3}>App Logs</Title>
+          <Badge variant="light" color="gray" size="sm">
+            redis
+          </Badge>
         </Group>
+        <Group gap="sm">
+          <SegmentedControl
+            size="xs"
+            value={levelFilter}
+            onChange={setLevelFilter}
+            data={[
+              { label: 'All', value: 'all' },
+              { label: 'Info', value: 'info' },
+              { label: 'Warn', value: 'warn' },
+              { label: 'Error', value: 'error' },
+            ]}
+          />
+          <Tooltip label="Clear all">
+            <ActionIcon
+              variant="subtle"
+              color="red"
+              onClick={() => {
+                if (confirm('Hapus semua app logs?')) clearLogs.mutate()
+              }}
+              loading={clearLogs.isPending}
+            >
+              <TbTrash size={16} />
+            </ActionIcon>
+          </Tooltip>
+          <Tooltip label="Refresh">
+            <ActionIcon variant="subtle" color="gray" onClick={() => refetch()} loading={isFetching}>
+              <TbRefresh size={16} />
+            </ActionIcon>
+          </Tooltip>
+        </Group>
+      </Group>
 
-        <Card withBorder radius="md" p={0}>
-          <Table highlightOnHover>
-            <Table.Thead>
+      <Card withBorder radius="md" p={0}>
+        <Table highlightOnHover>
+          <Table.Thead>
+            <Table.Tr>
+              <Table.Th w={180}>Time</Table.Th>
+              <Table.Th w={70}>Level</Table.Th>
+              <Table.Th>Message</Table.Th>
+              <Table.Th>Detail</Table.Th>
+            </Table.Tr>
+          </Table.Thead>
+          <Table.Tbody>
+            {isLoading && (
               <Table.Tr>
-                <Table.Th w={180}>Time</Table.Th>
-                <Table.Th w={70}>Level</Table.Th>
-                <Table.Th>Message</Table.Th>
-                <Table.Th>Detail</Table.Th>
+                <Table.Td colSpan={4}>
+                  <EmptyRow icon={TbFileText} title="Memuat log…" />
+                </Table.Td>
               </Table.Tr>
-            </Table.Thead>
-            <Table.Tbody>
-              {isLoading && (
-                <Table.Tr>
-                  <Table.Td colSpan={4}>
-                    <EmptyRow icon={TbFileText} title="Memuat log…" />
+            )}
+            {logs.length === 0 && !isLoading && (
+              <Table.Tr>
+                <Table.Td colSpan={4}>
+                  <EmptyRow
+                    icon={TbFileText}
+                    title="Belum ada log"
+                    message="Log akan muncul saat ada request/error. Logs tersimpan di Redis dengan retensi 500 entry."
+                  />
+                </Table.Td>
+              </Table.Tr>
+            )}
+            {pagedLogs.map((log) => {
+              const badge = levelBadge[log.level] ?? levelBadge.info
+              return (
+                <Table.Tr key={log.id}>
+                  <Table.Td>
+                    <Text size="xs" ff="monospace" c="dimmed">
+                      {new Date(log.timestamp).toLocaleString('id-ID', { hour12: false })}
+                    </Text>
+                  </Table.Td>
+                  <Table.Td>
+                    <Badge color={badge.color} variant="light" size="xs" tt="uppercase">
+                      {log.level}
+                    </Badge>
+                  </Table.Td>
+                  <Table.Td>
+                    <Text size="sm" ff="monospace">
+                      {log.message}
+                    </Text>
+                  </Table.Td>
+                  <Table.Td>
+                    <Text size="xs" c="dimmed" ff="monospace">
+                      {log.detail ?? '—'}
+                    </Text>
                   </Table.Td>
                 </Table.Tr>
-              )}
-              {logs.length === 0 && !isLoading && (
-                <Table.Tr>
-                  <Table.Td colSpan={4}>
-                    <EmptyRow
-                      icon={TbFileText}
-                      title="Belum ada log"
-                      message="Log akan muncul saat ada request/error. Logs tersimpan di Redis dengan retensi 500 entry."
-                    />
-                  </Table.Td>
-                </Table.Tr>
-              )}
-              {pagedLogs.map((log) => {
-                const badge = levelBadge[log.level] ?? levelBadge.info
-                return (
-                  <Table.Tr key={log.id}>
-                    <Table.Td>
-                      <Text size="xs" ff="monospace" c="dimmed">
-                        {new Date(log.timestamp).toLocaleString('id-ID', { hour12: false })}
-                      </Text>
-                    </Table.Td>
-                    <Table.Td>
-                      <Badge color={badge.color} variant="light" size="xs" tt="uppercase">
-                        {log.level}
-                      </Badge>
-                    </Table.Td>
-                    <Table.Td>
-                      <Text size="sm" ff="monospace">
-                        {log.message}
-                      </Text>
-                    </Table.Td>
-                    <Table.Td>
-                      <Text size="xs" c="dimmed" ff="monospace">
-                        {log.detail ?? '—'}
-                      </Text>
-                    </Table.Td>
-                  </Table.Tr>
-                )
-              })}
-            </Table.Tbody>
-          </Table>
-        </Card>
+              )
+            })}
+          </Table.Tbody>
+        </Table>
+      </Card>
 
-        {ordered.length > PAGE_SIZE && (
-          <Group justify="space-between">
-            <Text size="xs" c="dimmed">
-              {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, ordered.length)} of {ordered.length}
-            </Text>
-            <Pagination value={safePage} onChange={setPage} total={totalPages} size="sm" />
-          </Group>
-        )}
-      </Stack>
-    </Container>
+      {ordered.length > PAGE_SIZE && (
+        <Group justify="space-between">
+          <Text size="xs" c="dimmed">
+            {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, ordered.length)} of {ordered.length}
+          </Text>
+          <Pagination value={safePage} onChange={setPage} total={totalPages} size="sm" />
+        </Group>
+      )}
+    </Stack>
   )
 }
 
@@ -923,21 +895,17 @@ function DatabasePanelInner() {
 
   if (isLoading) {
     return (
-      <Container size="lg">
-        <Stack align="center" justify="center" mih={400}>
-          <Text c="dimmed">Loading schema...</Text>
-        </Stack>
-      </Container>
+      <Stack align="center" justify="center" mih={400}>
+        <Text c="dimmed">Loading schema...</Text>
+      </Stack>
     )
   }
 
   if (!schema) {
     return (
-      <Container size="lg">
-        <Stack align="center" justify="center" mih={400}>
-          <Text c="dimmed">Schema not found</Text>
-        </Stack>
-      </Container>
+      <Stack align="center" justify="center" mih={400}>
+        <Text c="dimmed">Schema not found</Text>
+      </Stack>
     )
   }
 
