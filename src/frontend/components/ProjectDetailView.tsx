@@ -42,6 +42,7 @@ import {
   TbTrash,
   TbUsers,
 } from 'react-icons/tb'
+import { useSession } from '../hooks/useAuth'
 import {
   ExtensionsSection,
   MembersSection,
@@ -127,6 +128,15 @@ function computeTimeProgress(p: Pick<ProjectListItem, 'startsAt' | 'endsAt'>): n
   return Math.round(((now - start) / (end - start)) * 100)
 }
 
+function isSystemAdmin(role: string | null | undefined): boolean {
+  return role === 'ADMIN' || role === 'SUPER_ADMIN'
+}
+
+function computeCanManage(myRole: string | null, systemRole: string | null | undefined): boolean {
+  if (isSystemAdmin(systemRole)) return true
+  return myRole === 'OWNER' || myRole === 'PM'
+}
+
 export function ProjectDetailView({
   projectId,
   tab,
@@ -141,6 +151,8 @@ export function ProjectDetailView({
   onDeleted: () => void
 }) {
   const qc = useQueryClient()
+  const session = useSession()
+  const systemRole = session.data?.user?.role ?? null
   const detailQ = useQuery({
     queryKey: ['project', projectId],
     queryFn: () => api<{ project: ProjectDetail; myRole: string | null }>(`/api/projects/${projectId}`),
@@ -223,25 +235,28 @@ export function ProjectDetailView({
               <TasksPanel projectId={project.id} />
             </Tabs.Panel>
             <Tabs.Panel value="team" pt="md">
-              <MembersSection projectId={project.id} myRole={project.myRole} ownerId={project.ownerId} />
+              <MembersSection
+                projectId={project.id}
+                myRole={project.myRole}
+                systemRole={systemRole}
+                ownerId={project.ownerId}
+              />
             </Tabs.Panel>
             <Tabs.Panel value="milestones" pt="md">
-              <MilestonesSection
-                projectId={project.id}
-                canManage={project.myRole === 'OWNER' || project.myRole === 'PM'}
-              />
+              <MilestonesSection projectId={project.id} canManage={computeCanManage(project.myRole, systemRole)} />
             </Tabs.Panel>
             <Tabs.Panel value="extensions" pt="md">
               <ExtensionsSection
                 projectId={project.id}
                 currentEndAt={project.endsAt}
                 startsAt={project.startsAt}
-                canExtend={project.myRole === 'OWNER' || project.myRole === 'PM'}
+                canExtend={computeCanManage(project.myRole, systemRole)}
               />
             </Tabs.Panel>
             <Tabs.Panel value="settings" pt="md">
               <SettingsTab
                 project={project}
+                systemRole={systemRole}
                 onDeleted={() => {
                   qc.invalidateQueries({ queryKey: ['projects'] })
                   qc.invalidateQueries({ queryKey: ['milestones', 'all'] })
@@ -710,7 +725,15 @@ function previewGithubRepo(input: string): string | null {
   return null
 }
 
-function SettingsTab({ project, onDeleted }: { project: ProjectDetail; onDeleted: () => void }) {
+function SettingsTab({
+  project,
+  systemRole,
+  onDeleted,
+}: {
+  project: ProjectDetail
+  systemRole: string | null
+  onDeleted: () => void
+}) {
   const qc = useQueryClient()
   const [name, setName] = useState(project.name)
   const [description, setDescription] = useState(project.description ?? '')
@@ -742,7 +765,8 @@ function SettingsTab({ project, onDeleted }: { project: ProjectDetail; onDeleted
   const endChanged = endsAt?.getTime() !== (project.endsAt ? new Date(project.endsAt).getTime() : null)
   const isExtending = project.endsAt && endsAt && endsAt.getTime() > new Date(project.endsAt).getTime()
   const canSave = !!name.trim() && !invalidRange && !update.isPending
-  const canManage = project.myRole === 'OWNER' || project.myRole === 'PM'
+  const canManage = computeCanManage(project.myRole, systemRole)
+  const canDelete = project.myRole === 'OWNER' || systemRole === 'SUPER_ADMIN'
 
   const confirmDelete = () => {
     modals.openConfirmModal({
@@ -876,7 +900,7 @@ function SettingsTab({ project, onDeleted }: { project: ProjectDetail; onDeleted
         error={update.error as Error | null}
       />
 
-      {project.myRole === 'OWNER' && (
+      {canDelete && (
         <Card withBorder padding="md" radius="md" style={{ borderColor: 'var(--mantine-color-red-4)' }}>
           <Stack gap="sm">
             <Text fw={600} size="sm" c="red">

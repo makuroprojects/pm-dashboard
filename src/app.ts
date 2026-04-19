@@ -214,6 +214,22 @@ async function requireProjectMember(
   return m
 }
 
+type ProjectRole = 'OWNER' | 'PM' | 'MEMBER' | 'VIEWER'
+
+function isSystemAdmin(role: string | undefined | null): boolean {
+  return role === 'ADMIN' || role === 'SUPER_ADMIN'
+}
+
+function canManageProject(auth: { role: string }, membership: { role: ProjectRole } | null): boolean {
+  if (isSystemAdmin(auth.role)) return true
+  return membership?.role === 'OWNER' || membership?.role === 'PM'
+}
+
+function canGrantProjectOwner(auth: { role: string }, membership: { role: ProjectRole } | null): boolean {
+  if (auth.role === 'SUPER_ADMIN') return true
+  return membership?.role === 'OWNER'
+}
+
 export function createApp() {
   appLog('info', 'Server starting')
 
@@ -1098,21 +1114,28 @@ export function createApp() {
             path: '/api/projects/:id/members',
             auth: 'authenticated',
             category: 'projects',
-            description: 'Add member to project (OWNER or PM)',
+            description: 'Add member to project (OWNER, PM, or system admin)',
+          },
+          {
+            method: 'PATCH',
+            path: '/api/projects/:id/members/:userId',
+            auth: 'authenticated',
+            category: 'projects',
+            description: 'Change member role (OWNER, PM, or system admin; OWNER role requires OWNER or SUPER_ADMIN)',
           },
           {
             method: 'DELETE',
             path: '/api/projects/:id/members/:userId',
             auth: 'authenticated',
             category: 'projects',
-            description: 'Remove member (OWNER only)',
+            description: 'Remove member (OWNER, PM, or system admin)',
           },
           {
             method: 'POST',
             path: '/api/projects/:id/extend',
             auth: 'authenticated',
             category: 'projects',
-            description: 'Extend project deadline (creates audit trail, OWNER or PM)',
+            description: 'Extend project deadline (OWNER, PM, or system admin)',
           },
           {
             method: 'GET',
@@ -2220,6 +2243,10 @@ export function createApp() {
           set.status = 401
           return { error: 'Unauthorized' }
         }
+        if (auth.role !== 'ADMIN' && auth.role !== 'SUPER_ADMIN') {
+          set.status = 403
+          return { error: 'Only admins can create projects' }
+        }
         const body = (await request.json()) as {
           name?: string
           description?: string
@@ -2306,9 +2333,9 @@ export function createApp() {
           return { error: 'Unauthorized' }
         }
         const membership = await requireProjectMember(params.id, auth.userId)
-        if (!membership || (membership.role !== 'OWNER' && membership.role !== 'PM')) {
+        if (!canManageProject(auth, membership)) {
           set.status = 403
-          return { error: 'Only OWNER or PM can modify project' }
+          return { error: 'Only OWNER, PM, or system admin can modify project' }
         }
         const body = (await request.json()) as {
           name?: string
@@ -2509,9 +2536,9 @@ export function createApp() {
           return { error: 'Unauthorized' }
         }
         const membership = await requireProjectMember(params.id, auth.userId)
-        if (!membership || (membership.role !== 'OWNER' && membership.role !== 'PM')) {
+        if (!canManageProject(auth, membership)) {
           set.status = 403
-          return { error: 'Only OWNER or PM can add members' }
+          return { error: 'Only OWNER, PM, or system admin can add members' }
         }
         const body = (await request.json()) as { userId?: string; role?: string }
         if (!body.userId) {
@@ -2519,9 +2546,9 @@ export function createApp() {
           return { error: 'userId wajib diisi' }
         }
         const role = (body.role ?? 'MEMBER') as 'OWNER' | 'PM' | 'MEMBER' | 'VIEWER'
-        if (role === 'OWNER' && membership.role !== 'OWNER') {
+        if (role === 'OWNER' && !canGrantProjectOwner(auth, membership)) {
           set.status = 403
-          return { error: 'Only OWNER can grant OWNER role' }
+          return { error: 'Only OWNER or SUPER_ADMIN can grant OWNER role' }
         }
         const existingMember = await prisma.projectMember.findUnique({
           where: { projectId_userId: { projectId: params.id, userId: body.userId } },
@@ -2545,9 +2572,9 @@ export function createApp() {
           return { error: 'Unauthorized' }
         }
         const membership = await requireProjectMember(params.id, auth.userId)
-        if (!membership || (membership.role !== 'OWNER' && membership.role !== 'PM')) {
+        if (!canManageProject(auth, membership)) {
           set.status = 403
-          return { error: 'Only OWNER or PM can extend deadline' }
+          return { error: 'Only OWNER, PM, or system admin can extend deadline' }
         }
         const body = (await request.json()) as { newEndAt?: string; reason?: string }
         if (!body.newEndAt) {
@@ -2666,9 +2693,9 @@ export function createApp() {
           return { error: 'Unauthorized' }
         }
         const membership = await requireProjectMember(params.id, auth.userId)
-        if (!membership || (membership.role !== 'OWNER' && membership.role !== 'PM')) {
+        if (!canManageProject(auth, membership)) {
           set.status = 403
-          return { error: 'Only OWNER or PM can create milestones' }
+          return { error: 'Only OWNER, PM, or system admin can create milestones' }
         }
         const body = (await request.json()) as {
           title?: string
@@ -2712,9 +2739,9 @@ export function createApp() {
           return { error: 'Milestone not found' }
         }
         const membership = await requireProjectMember(existing.projectId, auth.userId)
-        if (!membership || (membership.role !== 'OWNER' && membership.role !== 'PM')) {
+        if (!canManageProject(auth, membership)) {
           set.status = 403
-          return { error: 'Only OWNER or PM can modify milestones' }
+          return { error: 'Only OWNER, PM, or system admin can modify milestones' }
         }
         const body = (await request.json()) as {
           title?: string
@@ -2754,13 +2781,48 @@ export function createApp() {
           return { error: 'Milestone not found' }
         }
         const membership = await requireProjectMember(existing.projectId, auth.userId)
-        if (!membership || (membership.role !== 'OWNER' && membership.role !== 'PM')) {
+        if (!canManageProject(auth, membership)) {
           set.status = 403
-          return { error: 'Only OWNER or PM can delete milestones' }
+          return { error: 'Only OWNER, PM, or system admin can delete milestones' }
         }
         await prisma.projectMilestone.delete({ where: { id: params.id } })
         audit(auth.userId, 'MILESTONE_DELETED', `${existing.projectId}/${params.id} ${existing.title}`, getIp(request))
         return { ok: true }
+      })
+
+      .patch('/api/projects/:id/members/:userId', async ({ request, params, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        const membership = await requireProjectMember(params.id, auth.userId)
+        if (!canManageProject(auth, membership)) {
+          set.status = 403
+          return { error: 'Only OWNER, PM, or system admin can change member role' }
+        }
+        const body = (await request.json()) as { role?: string }
+        const role = body.role as 'OWNER' | 'PM' | 'MEMBER' | 'VIEWER' | undefined
+        if (!role || !['OWNER', 'PM', 'MEMBER', 'VIEWER'].includes(role)) {
+          set.status = 400
+          return { error: 'role wajib diisi (OWNER|PM|MEMBER|VIEWER)' }
+        }
+        if (role === 'OWNER' && !canGrantProjectOwner(auth, membership)) {
+          set.status = 403
+          return { error: 'Only OWNER or SUPER_ADMIN can grant OWNER role' }
+        }
+        const project = await prisma.project.findUnique({ where: { id: params.id }, select: { ownerId: true } })
+        if (project?.ownerId === params.userId && role !== 'OWNER') {
+          set.status = 400
+          return { error: 'Cannot demote the project owner' }
+        }
+        const updated = await prisma.projectMember.update({
+          where: { projectId_userId: { projectId: params.id, userId: params.userId } },
+          data: { role },
+          include: { user: { select: { id: true, name: true, email: true, role: true } } },
+        })
+        audit(auth.userId, 'PROJECT_MEMBER_ROLE_CHANGED', `${params.id} ${params.userId} → ${role}`, getIp(request))
+        return { member: updated }
       })
 
       .delete('/api/projects/:id/members/:userId', async ({ request, params, set }) => {
@@ -2770,9 +2832,9 @@ export function createApp() {
           return { error: 'Unauthorized' }
         }
         const membership = await requireProjectMember(params.id, auth.userId)
-        if (!membership || membership.role !== 'OWNER') {
+        if (!canManageProject(auth, membership)) {
           set.status = 403
-          return { error: 'Only OWNER can remove members' }
+          return { error: 'Only OWNER, PM, or system admin can remove members' }
         }
         const project = await prisma.project.findUnique({ where: { id: params.id }, select: { ownerId: true } })
         if (project?.ownerId === params.userId) {

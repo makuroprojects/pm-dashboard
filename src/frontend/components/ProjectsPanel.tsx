@@ -42,6 +42,7 @@ import {
   TbUsers,
   TbX,
 } from 'react-icons/tb'
+import { useSession } from '../hooks/useAuth'
 import { EChart } from './charts/EChart'
 
 export type MemberRole = 'OWNER' | 'PM' | 'MEMBER' | 'VIEWER'
@@ -263,6 +264,9 @@ function sortProjects(list: ProjectListItem[], key: SortKey): ProjectListItem[] 
 export function ProjectsPanel() {
   const qc = useQueryClient()
   const navigate = useNavigate()
+  const session = useSession()
+  const role = session.data?.user?.role
+  const canCreateProject = role === 'ADMIN' || role === 'SUPER_ADMIN'
   const [createOpen, setCreateOpen] = useState(false)
   const [statusFilter, setStatusFilter] = useState<ProjectStatus | null>(null)
   const [priorityFilter, setPriorityFilter] = useState<ProjectPriority | null>(null)
@@ -389,9 +393,11 @@ export function ProjectsPanel() {
               <TbRefresh size={16} />
             </ActionIcon>
           </Tooltip>
-          <Button leftSection={<TbPlus size={16} />} onClick={() => setCreateOpen(true)}>
-            New Project
-          </Button>
+          {canCreateProject && (
+            <Button leftSection={<TbPlus size={16} />} onClick={() => setCreateOpen(true)}>
+              New Project
+            </Button>
+          )}
         </Group>
       </Group>
 
@@ -542,12 +548,14 @@ export function ProjectsPanel() {
             </Text>
             <Text size="sm" c="dimmed" ta="center" maw={360}>
               {projects.length === 0
-                ? 'Create your first project to start organizing tasks and tracking ActivityWatch focus.'
+                ? canCreateProject
+                  ? 'Create your first project to start organizing tasks and tracking ActivityWatch focus.'
+                  : 'You have not been added to any project yet. Ask an admin to invite you.'
                 : hasActiveFilters
                   ? 'Try clearing filters or searching by a different keyword.'
                   : 'Pick a different view or create a new project.'}
             </Text>
-            {projects.length === 0 ? (
+            {projects.length === 0 && canCreateProject ? (
               <Button leftSection={<TbPlus size={16} />} onClick={() => setCreateOpen(true)}>
                 Create Project
               </Button>
@@ -983,10 +991,12 @@ const MEMBER_ROLE_OPTIONS: Array<{ value: MemberRole; label: string }> = [
 export function MembersSection({
   projectId,
   myRole,
+  systemRole,
   ownerId,
 }: {
   projectId: string
   myRole: MemberRole
+  systemRole?: string | null
   ownerId: string
 }) {
   const qc = useQueryClient()
@@ -1017,6 +1027,19 @@ export function MembersSection({
     },
   })
 
+  const changeRole = useMutation({
+    mutationFn: ({ userId, role }: { userId: string; role: MemberRole }) =>
+      api(`/api/projects/${projectId}/members/${userId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['project', projectId] })
+      qc.invalidateQueries({ queryKey: ['projects'] })
+    },
+  })
+
   const removeMember = useMutation({
     mutationFn: (userId: string) => api(`/api/projects/${projectId}/members/${userId}`, { method: 'DELETE' }),
     onSuccess: () => {
@@ -1025,9 +1048,10 @@ export function MembersSection({
     },
   })
 
-  const canManage = myRole === 'OWNER' || myRole === 'PM'
-  const canRemove = myRole === 'OWNER'
-  const canGrantOwner = myRole === 'OWNER'
+  const isSysAdmin = systemRole === 'ADMIN' || systemRole === 'SUPER_ADMIN'
+  const canManage = isSysAdmin || myRole === 'OWNER' || myRole === 'PM'
+  const canRemove = canManage
+  const canGrantOwner = systemRole === 'SUPER_ADMIN' || myRole === 'OWNER'
 
   const members = detailQ.data?.project.members ?? []
   const memberUserIds = new Set(members.map((m) => m.userId))
@@ -1069,7 +1093,7 @@ export function MembersSection({
                       size="xs"
                       data={roleOptions}
                       value={m.role}
-                      onChange={(v) => v && addMember.mutate({ userId: m.userId, role: v as MemberRole })}
+                      onChange={(v) => v && changeRole.mutate({ userId: m.userId, role: v as MemberRole })}
                       w={110}
                       allowDeselect={false}
                     />
@@ -1132,9 +1156,11 @@ export function MembersSection({
         </Group>
       )}
 
-      {(addMember.error || removeMember.error) && (
+      {(addMember.error || changeRole.error || removeMember.error) && (
         <Text size="xs" c="red">
-          {(addMember.error as Error | null)?.message ?? (removeMember.error as Error | null)?.message}
+          {(addMember.error as Error | null)?.message ??
+            (changeRole.error as Error | null)?.message ??
+            (removeMember.error as Error | null)?.message}
         </Text>
       )}
     </Stack>
