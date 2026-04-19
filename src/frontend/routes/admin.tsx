@@ -28,7 +28,9 @@ import {
   TbLayoutDashboard,
   TbLayoutSidebarLeftCollapse,
   TbLayoutSidebarLeftExpand,
+  TbListCheck,
   TbLogout,
+  TbPlugConnected,
   TbReportAnalytics,
   TbSettings,
   TbShieldLock,
@@ -36,14 +38,17 @@ import {
   TbUser,
   TbUsers,
 } from 'react-icons/tb'
+import { AnalyticsPanel } from '@/frontend/components/admin/AnalyticsPanel'
 import { AuditLogsPanel } from '@/frontend/components/admin/AuditLogsPanel'
 import { ProjectsOverviewPanel } from '@/frontend/components/admin/ProjectsOverviewPanel'
+import { SessionsPanel } from '@/frontend/components/admin/SessionsPanel'
+import { TaskTriagePanel } from '@/frontend/components/admin/TaskTriagePanel'
 import { UsersPanel } from '@/frontend/components/admin/UsersPanel'
 import { NotificationBell } from '@/frontend/components/NotificationBell'
 import { ThemeToggle } from '@/frontend/components/ThemeToggle'
 import { useLogout, useSession } from '@/frontend/hooks/useAuth'
 
-const validTabs = ['overview', 'users', 'audit-logs', 'projects', 'analytics'] as const
+const validTabs = ['overview', 'users', 'audit-logs', 'projects', 'tasks', 'analytics', 'sessions'] as const
 type TabKey = (typeof validTabs)[number]
 
 export const Route = createFileRoute('/admin')({
@@ -76,7 +81,9 @@ const navItems: NavItem[] = [
   { label: 'Users', icon: TbUsers, key: 'users' },
   { label: 'Audit Logs', icon: TbClipboardList, key: 'audit-logs' },
   { label: 'Projects', icon: TbTarget, key: 'projects' },
+  { label: 'Task Triage', icon: TbListCheck, key: 'tasks' },
   { label: 'Analytics', icon: TbReportAnalytics, key: 'analytics' },
+  { label: 'Sessions', icon: TbPlugConnected, key: 'sessions' },
 ]
 
 function AdminPage() {
@@ -267,13 +274,9 @@ function AdminPage() {
           {active === 'users' && <UsersPanel />}
           {active === 'audit-logs' && <AuditLogsPanel />}
           {active === 'projects' && <ProjectsOverviewPanel />}
-          {active === 'analytics' && (
-            <PlaceholderPanel
-              title="Analytics"
-              icon={TbReportAnalytics}
-              description="Cross-project KPIs and throughput trends. Coming in Phase 2."
-            />
-          )}
+          {active === 'tasks' && <TaskTriagePanel />}
+          {active === 'analytics' && <AnalyticsPanel />}
+          {active === 'sessions' && <SessionsPanel />}
         </Container>
       </AppShell.Main>
     </AppShell>
@@ -340,29 +343,5 @@ function StatCard({
         </ThemeIcon>
       </Group>
     </Card>
-  )
-}
-
-function PlaceholderPanel({
-  title,
-  icon: Icon,
-  description,
-}: {
-  title: string
-  icon: typeof TbLayoutDashboard
-  description: string
-}) {
-  return (
-    <Paper withBorder p="xl" radius="md">
-      <Stack align="center" gap="md" py="xl">
-        <ThemeIcon variant="light" color="violet" size={60} radius="md">
-          <Icon size={32} />
-        </ThemeIcon>
-        <Title order={3}>{title}</Title>
-        <Text size="sm" c="dimmed" ta="center" maw={480}>
-          {description}
-        </Text>
-      </Stack>
-    </Paper>
   )
 }
