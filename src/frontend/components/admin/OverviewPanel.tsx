@@ -6,6 +6,7 @@ import {
   Group,
   Progress,
   SimpleGrid,
+  Skeleton,
   Stack,
   Text,
   ThemeIcon,
@@ -14,7 +15,7 @@ import {
 } from '@mantine/core'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   TbActivity,
   TbAlertTriangle,
@@ -299,6 +300,31 @@ export function OverviewPanel() {
 
   const logs = auditQ.data?.logs ?? []
 
+  const lastFetchedAt = useMemo(() => {
+    const updates = [
+      usersQ.dataUpdatedAt,
+      projectsQ.dataUpdatedAt,
+      tasksQ.dataUpdatedAt,
+      agentsQ.dataUpdatedAt,
+      auditQ.dataUpdatedAt,
+      risksQ.dataUpdatedAt,
+      healthQ.dataUpdatedAt,
+      loadQ.dataUpdatedAt,
+    ].filter((t) => t > 0)
+    return updates.length ? Math.min(...updates) : 0
+  }, [
+    usersQ.dataUpdatedAt,
+    projectsQ.dataUpdatedAt,
+    tasksQ.dataUpdatedAt,
+    agentsQ.dataUpdatedAt,
+    auditQ.dataUpdatedAt,
+    risksQ.dataUpdatedAt,
+    healthQ.dataUpdatedAt,
+    loadQ.dataUpdatedAt,
+  ])
+
+  const freshness = useFreshness(lastFetchedAt)
+
   return (
     <Stack gap="lg">
       <Group justify="space-between">
@@ -308,11 +334,18 @@ export function OverviewPanel() {
             Ringkasan sistem real-time. Auto-refresh 30 detik.
           </Text>
         </div>
-        <Tooltip label="Refresh all">
-          <ActionIcon variant="subtle" onClick={refetchAll} loading={fetching}>
-            <TbRefresh size={16} />
-          </ActionIcon>
-        </Tooltip>
+        <Group gap="xs">
+          {freshness && (
+            <Text size="xs" c="dimmed">
+              updated {freshness}
+            </Text>
+          )}
+          <Tooltip label="Refresh all">
+            <ActionIcon variant="subtle" onClick={refetchAll} loading={fetching}>
+              <TbRefresh size={16} />
+            </ActionIcon>
+          </Tooltip>
+        </Group>
       </Group>
 
       <SimpleGrid cols={{ base: 1, sm: 2, md: 4 }} spacing="md">
@@ -352,13 +385,24 @@ export function OverviewPanel() {
         />
       </SimpleGrid>
 
-      {risksQ.data && <RedFlagsSection risks={risksQ.data} navigate={navigate} />}
-
-      {healthQ.data && healthQ.data.projects.length > 0 && (
-        <PortfolioHealthSection rows={healthQ.data.projects} navigate={navigate} />
+      {risksQ.isLoading ? (
+        <SectionSkeleton height={220} />
+      ) : (
+        risksQ.data && <RedFlagsSection risks={risksQ.data} navigate={navigate} />
       )}
 
-      {loadQ.data && loadQ.data.rows.length > 0 && <TeamLoadSection rows={loadQ.data.rows} />}
+      {healthQ.isLoading ? (
+        <SectionSkeleton height={180} />
+      ) : (
+        healthQ.data &&
+        healthQ.data.projects.length > 0 && <PortfolioHealthSection rows={healthQ.data.projects} navigate={navigate} />
+      )}
+
+      {loadQ.isLoading ? (
+        <SectionSkeleton height={160} />
+      ) : (
+        loadQ.data && loadQ.data.rows.length > 0 && <TeamLoadSection rows={loadQ.data.rows} />
+      )}
 
       <Card withBorder padding="md" radius="md">
         <Stack gap="sm">
@@ -692,4 +736,24 @@ function TeamLoadSection({ rows }: { rows: LoadRow[] }) {
       </Stack>
     </Card>
   )
+}
+
+function SectionSkeleton({ height }: { height: number }) {
+  return <Skeleton height={height} radius="md" />
+}
+
+function useFreshness(timestamp: number) {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 5_000)
+    return () => clearInterval(id)
+  }, [])
+  if (!timestamp) return null
+  const seconds = Math.max(0, Math.round((now - timestamp) / 1000))
+  if (seconds < 5) return 'just now'
+  if (seconds < 60) return `${seconds}s ago`
+  const minutes = Math.round(seconds / 60)
+  if (minutes < 60) return `${minutes}m ago`
+  const hours = Math.round(minutes / 60)
+  return `${hours}h ago`
 }

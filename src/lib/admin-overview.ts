@@ -401,9 +401,9 @@ export async function computeRiskReport(opts: { staleDays?: number; offlineHours
   const severity: RiskSeverity =
     pastDueProjects.length > 0 || missingEnv.length > 0
       ? 'high'
-      : overdueTasks.length > 5 || staleTasks.length > 5 || pendingAgents.length > 0
+      : overdueTasks.length > 5 || staleTasks.length > 5
         ? 'medium'
-        : overdueTasks.length > 0 || staleTasks.length > 0 || offlineAgents.length > 0
+        : overdueTasks.length > 0 || staleTasks.length > 0 || offlineAgents.length > 0 || pendingAgents.length > 0
           ? 'low'
           : 'none'
 

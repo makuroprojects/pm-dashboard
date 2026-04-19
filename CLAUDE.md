@@ -116,7 +116,7 @@ System-wide "what needs attention right now" dashboard at `/admin?tab=overview`.
   - `computeAdminOverview({ recentAuditLimit? })` — aggregated KPIs (users/projects/tasks/agents/webhooks24h/velocity/recentAudit). Mirrors `/admin` top cards.
   - `computeProjectHealth({ projectId?, includeArchived?, limit? })` — per-project score 0-100 + grade A-F derived from pastDue (-35), overdueTasks (-5 each capped 25), blockedTasks (-3 each capped 15), extensions>2 (-10), extensions>4 (-5), no velocity on ACTIVE project (-10). Sorted worst-first.
   - `computeTeamLoad({ projectId?, includeUnassigned?, limit? })` — per-user `open`, `estimateHours`, `highPriority`, `overdue`, `closed7d`; `overloaded = open >= 10 || estimateHours > 80 || overdue >= 3`. Sorted by open desc.
-  - `computeRiskReport({ staleDays?, offlineHours? })` — consolidated scan: overdueTasks, staleTasks (IN_PROGRESS not updated in N days), pastDueProjects, pendingAgents, offlineAgents, missingEnv (DATABASE_URL/REDIS_URL/GOOGLE_*). Rolls up severity: `none`/`low`/`medium`/`high`.
+  - `computeRiskReport({ staleDays?, offlineHours? })` — consolidated scan: overdueTasks, staleTasks (IN_PROGRESS not updated in N days), pastDueProjects, pendingAgents, offlineAgents, missingEnv (DATABASE_URL/REDIS_URL/GOOGLE_*). Severity rollup: `high` (pastDueProjects > 0 OR missingEnv > 0), `medium` (>5 overdueTasks OR >5 staleTasks), `low` (any overdue/stale/offline/pending agent), else `none`.
 - **API** (ADMIN + SUPER_ADMIN):
   - `GET /api/admin/overview/kpis?recentAuditLimit=N`
   - `GET /api/admin/overview/health?projectId&includeArchived&limit`
