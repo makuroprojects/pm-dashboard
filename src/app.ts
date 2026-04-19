@@ -3,7 +3,13 @@ import { html } from '@elysiajs/html'
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
 import { Elysia } from 'elysia'
 import { createMcpServer, type McpScope } from '../scripts/mcp/server'
-import { computeAdminOverview, computeProjectHealth, computeRiskReport, computeTeamLoad } from './lib/admin-overview'
+import {
+  computeAdminOverview,
+  computeAnalytics,
+  computeProjectHealth,
+  computeRiskReport,
+  computeTeamLoad,
+} from './lib/admin-overview'
 import { appLog, clearAppLogs, getAppLogs } from './lib/applog'
 import { prisma } from './lib/db'
 import { computePhantomWork, computeTaskEffort, detectGhostTasks, effortReport } from './lib/effort'
@@ -2422,6 +2428,21 @@ export function createApp() {
         }
         const recentAuditLimit = Math.min(50, Math.max(0, Number(query.recentAuditLimit) || 8))
         return computeAdminOverview({ recentAuditLimit })
+      })
+
+      .get('/api/admin/overview/analytics', async ({ request, query, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        if (!isSystemAdmin(auth.role)) {
+          set.status = 403
+          return { error: 'Forbidden' }
+        }
+        const timelineLimit = Math.min(50, Math.max(1, Number(query.timelineLimit) || 12))
+        const trendDays = Math.min(60, Math.max(1, Number(query.trendDays) || 14))
+        return computeAnalytics({ timelineLimit, trendDays })
       })
 
       // ─── Projects API ─────────────────────────────────

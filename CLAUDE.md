@@ -117,12 +117,14 @@ System-wide "what needs attention right now" dashboard at `/admin?tab=overview`.
   - `computeProjectHealth({ projectId?, includeArchived?, limit? })` — per-project score 0-100 + grade A-F derived from pastDue (-35), overdueTasks (-5 each capped 25), blockedTasks (-3 each capped 15), extensions>2 (-10), extensions>4 (-5), no velocity on ACTIVE project (-10). Sorted worst-first.
   - `computeTeamLoad({ projectId?, includeUnassigned?, limit? })` — per-user `open`, `estimateHours`, `highPriority`, `overdue`, `closed7d`; `overloaded = open >= 10 || estimateHours > 80 || overdue >= 3`. Sorted by open desc.
   - `computeRiskReport({ staleDays?, offlineHours? })` — consolidated scan: overdueTasks, staleTasks (IN_PROGRESS not updated in N days), pastDueProjects, pendingAgents, offlineAgents, missingEnv (DATABASE_URL/REDIS_URL/GOOGLE_*). Severity rollup: `high` (pastDueProjects > 0 OR missingEnv > 0), `medium` (>5 overdueTasks OR >5 staleTasks), `low` (any overdue/stale/offline/pending agent), else `none`.
+  - `computeAnalytics({ timelineLimit?, trendDays? })` — chart-ready aggregates: `projectsByStatus`, `tasksByStatus`, `timeline` (active projects with startsAt/endsAt/slipped flag), `deadlineGroups` (pastDue / endingSoon <7d / endingMonth 7–30d), `taskTrend` (created vs closed per day, last N days, default 14, max 60).
 - **API** (ADMIN + SUPER_ADMIN):
   - `GET /api/admin/overview/kpis?recentAuditLimit=N`
   - `GET /api/admin/overview/health?projectId&includeArchived&limit`
   - `GET /api/admin/overview/load?projectId&includeUnassigned&limit`
   - `GET /api/admin/overview/risks?staleDays&offlineHours`
-- **Frontend**: `OverviewPanel.tsx` — KPI cards (existing) + Red flags (severity badge + 6 risk stats + overdue top-5 + past-due projects list) + Portfolio health grid (card per project with A-F badge, clickable) + Team load bars (Progress per user colored by overloaded-threshold). Red flags refresh 30s; health + load refresh 60s.
+  - `GET /api/admin/overview/analytics?timelineLimit&trendDays`
+- **Frontend**: `OverviewPanel.tsx` — KPI cards (skeleton-loading) + Red flags (severity badge + 6 risk stats + overdue top-5 + past-due projects list) + Portfolio health grid (card per project with A-F badge, clickable) + Team load bars (Progress per user colored by overloaded-threshold) + **AnalyticsSection** (Gantt-style project timeline with today marker, status-breakdown donuts for projects+tasks, task-trend line chart with Created/Closed series, deadline-groups 3-column list) — all via ECharts (`src/frontend/components/charts/EChart.tsx` wrapper). Red flags refresh 30s; health + load + analytics refresh 60s. Empty states shown when no data.
 - **MCP tools** (readonly, in `overview.ts` module): `admin_overview`, `project_health`, `team_load`, `risk_report` — now call the same lib functions as the HTTP endpoints.
 
 ## Effort Tracking

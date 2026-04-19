@@ -30,6 +30,7 @@ import {
   TbUsersGroup,
 } from 'react-icons/tb'
 import type { Role } from '@/frontend/hooks/useAuth'
+import { type AnalyticsData, AnalyticsSection } from './AnalyticsSection'
 
 interface AdminUser {
   id: string
@@ -246,6 +247,15 @@ export function OverviewPanel() {
     refetchInterval: 60_000,
   })
 
+  const analyticsQ = useQuery({
+    queryKey: ['admin', 'overview', 'analytics'],
+    queryFn: () =>
+      fetch('/api/admin/overview/analytics', { credentials: 'include' }).then((r) =>
+        r.json(),
+      ) as Promise<AnalyticsData>,
+    refetchInterval: 60_000,
+  })
+
   const loading = usersQ.isLoading || projectsQ.isLoading || tasksQ.isLoading || agentsQ.isLoading || auditQ.isLoading
   const fetching =
     usersQ.isFetching ||
@@ -255,7 +265,8 @@ export function OverviewPanel() {
     auditQ.isFetching ||
     risksQ.isFetching ||
     healthQ.isFetching ||
-    loadQ.isFetching
+    loadQ.isFetching ||
+    analyticsQ.isFetching
 
   const stats = useMemo(() => {
     const users = usersQ.data?.users ?? []
@@ -296,6 +307,7 @@ export function OverviewPanel() {
     risksQ.refetch()
     healthQ.refetch()
     loadQ.refetch()
+    analyticsQ.refetch()
   }
 
   const logs = auditQ.data?.logs ?? []
@@ -310,6 +322,7 @@ export function OverviewPanel() {
       risksQ.dataUpdatedAt,
       healthQ.dataUpdatedAt,
       loadQ.dataUpdatedAt,
+      analyticsQ.dataUpdatedAt,
     ].filter((t) => t > 0)
     return updates.length ? Math.min(...updates) : 0
   }, [
@@ -321,6 +334,7 @@ export function OverviewPanel() {
     risksQ.dataUpdatedAt,
     healthQ.dataUpdatedAt,
     loadQ.dataUpdatedAt,
+    analyticsQ.dataUpdatedAt,
   ])
 
   const freshness = useFreshness(lastFetchedAt)
@@ -421,6 +435,12 @@ export function OverviewPanel() {
           title="Team load"
           message="Belum ada task aktif yang di-assign. Team load akan muncul saat user punya beban kerja."
         />
+      ) : null}
+
+      {analyticsQ.isLoading ? (
+        <SectionSkeleton height={320} />
+      ) : analyticsQ.data ? (
+        <AnalyticsSection data={analyticsQ.data} />
       ) : null}
 
       <Card withBorder padding="md" radius="md">

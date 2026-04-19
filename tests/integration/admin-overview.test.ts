@@ -71,6 +71,7 @@ const ENDPOINTS = [
   '/api/admin/overview/risks',
   '/api/admin/overview/health',
   '/api/admin/overview/load',
+  '/api/admin/overview/analytics',
 ]
 
 describe('admin overview cockpit endpoints: auth gating', () => {
@@ -144,5 +145,40 @@ describe('GET /api/admin/overview/load', () => {
     expect(row.overdue).toBeGreaterThanOrEqual(1)
     expect(row.highPriority).toBeGreaterThanOrEqual(1)
     expect(typeof row.overloaded).toBe('boolean')
+  })
+})
+
+describe('GET /api/admin/overview/analytics', () => {
+  test('returns timeline, status breakdowns, deadline groups, task trend', async () => {
+    const res = await get('/api/admin/overview/analytics?trendDays=14&timelineLimit=12', adminToken)
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(typeof body.timestamp).toBe('string')
+    expect(body.projectsByStatus).toBeDefined()
+    expect(body.tasksByStatus).toBeDefined()
+    expect(Array.isArray(body.timeline)).toBe(true)
+    expect(body.deadlineGroups).toBeDefined()
+    expect(Array.isArray(body.deadlineGroups.endingSoon)).toBe(true)
+    expect(Array.isArray(body.deadlineGroups.endingMonth)).toBe(true)
+    expect(Array.isArray(body.deadlineGroups.pastDue)).toBe(true)
+    expect(Array.isArray(body.taskTrend)).toBe(true)
+    expect(body.taskTrend.length).toBe(14)
+    for (const bucket of body.taskTrend) {
+      expect(typeof bucket.date).toBe('string')
+      expect(typeof bucket.created).toBe('number')
+      expect(typeof bucket.closed).toBe('number')
+    }
+    const active = body.timeline.find((p: { id: string }) => p.id === projectId)
+    expect(active).toBeDefined()
+    expect(active.status).toBe('ACTIVE')
+    expect(typeof active.slipped).toBe('boolean')
+    expect(body.projectsByStatus.ACTIVE).toBeGreaterThanOrEqual(1)
+  })
+
+  test('clamps trendDays to sane range', async () => {
+    const res = await get('/api/admin/overview/analytics?trendDays=9999', adminToken)
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.taskTrend.length).toBeLessThanOrEqual(60)
   })
 })
