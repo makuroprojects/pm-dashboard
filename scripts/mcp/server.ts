@@ -9,6 +9,7 @@ import { githubReadonly } from './tools/github'
 import { healthTools } from './tools/health'
 import { logsAdmin, logsReadonly } from './tools/logs'
 import { milestonesReadonly, milestonesTools } from './tools/milestones'
+import { overviewReadonly } from './tools/overview'
 import { presenceTools } from './tools/presence'
 import { projectTools } from './tools/project'
 import { projectsReadonly, projectsTools } from './tools/projects'
@@ -32,6 +33,7 @@ const READONLY_MODULES: ToolModule[] = [
   projectsReadonly,
   tasksReadonly,
   milestonesReadonly,
+  overviewReadonly,
 ]
 
 const ADMIN_MODULES: ToolModule[] = [

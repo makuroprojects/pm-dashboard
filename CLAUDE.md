@@ -134,10 +134,11 @@ Projects can be linked 1:1 to a GitHub repo via `Project.githubRepo` (stored can
 Local MCP server lets Claude drive the app remotely. `.mcp.json` registers `pm-dashboard` (runs `scripts/mcp/server.ts`) alongside `playwright`. Requires `MCP_SECRET`; `MCP_SECRET_ADMIN` unlocks write/dev tools.
 
 - Entry: `scripts/mcp/server.ts` + `scripts/mcp/test-client.ts`
-- Tool modules (`scripts/mcp/tools/`): `admin`, `agents`, `code`, `db`, `dev`, `github`, `health`, `logs`, `milestones`, `presence`, `project`, `projects`, `redis`, `tasks`, `webhooks` (15 modules, 71 tools). `shared.ts` is a helper, not a tool module.
+- Tool modules (`scripts/mcp/tools/`): `admin`, `agents`, `code`, `db`, `dev`, `github`, `health`, `logs`, `milestones`, `overview`, `presence`, `project`, `projects`, `redis`, `tasks`, `webhooks` (16 modules, 75 tools). `shared.ts` is a helper, not a tool module.
 - Agent tools: `agent_list`, `agent_get` (readonly); `agent_approve`, `agent_revoke`, `agent_reassign` (admin)
 - Webhook tools: `webhook_token_list`, `webhook_stats`, `webhook_logs` (readonly); `webhook_token_create` (returns plaintext once), `webhook_token_toggle`, `webhook_token_revoke` (admin)
 - GitHub tools (readonly): `github_summary`, `github_feed`, `github_webhook_logs` — all accept project id, name, or `owner/repo`
+- Overview tools (readonly): `admin_overview` (KPIs across users/projects/tasks/agents/webhooks), `project_health` (per-project score A-F from overdue/blocked/extensions/velocity), `team_load` (per-user open/overdue/estimated hours, flags overloaded), `risk_report` (overdue tasks + stale IN_PROGRESS + past-due projects + pending agents + offline agents + missing env, severity rolled up)
 - HTTP fallback: `POST /mcp` — readonly with `MCP_SECRET`, full with `MCP_SECRET_ADMIN`
 
 ## WebSocket
