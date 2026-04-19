@@ -4,6 +4,7 @@ import {
   Button,
   Card,
   Checkbox,
+  Divider,
   Group,
   Modal,
   Progress,
@@ -402,55 +403,88 @@ export function ProjectsPanel() {
       </Group>
 
       {projects.length > 0 && (
-        <SimpleGrid cols={{ base: 2, xs: 3, md: 6 }} spacing="xs">
-          <PortfolioStat
-            label="All"
-            value={projects.length}
-            color="blue"
-            active={!hasActiveFilters}
-            onClick={clearFilters}
-          />
-          <PortfolioStat
-            label="Active"
-            value={statusCounts.ACTIVE}
-            color="blue"
-            active={statusFilter === 'ACTIVE'}
-            onClick={() => setStatusFilter(statusFilter === 'ACTIVE' ? null : 'ACTIVE')}
-          />
-          <PortfolioStat
-            label="Overdue"
-            value={overdueCount}
-            color="red"
-            icon={<TbAlertTriangle size={14} />}
-            active={derivedFilter === 'overdue'}
-            muted={overdueCount === 0 && derivedFilter !== 'overdue'}
-            onClick={
-              overdueCount > 0 ? () => setDerivedFilter(derivedFilter === 'overdue' ? null : 'overdue') : undefined
-            }
-          />
-          <PortfolioStat
-            label="At risk"
-            value={atRiskCount}
-            color="yellow"
-            active={derivedFilter === 'atRisk'}
-            muted={atRiskCount === 0 && derivedFilter !== 'atRisk'}
-            onClick={atRiskCount > 0 ? () => setDerivedFilter(derivedFilter === 'atRisk' ? null : 'atRisk') : undefined}
-          />
-          <PortfolioStat
-            label="On hold"
-            value={statusCounts.ON_HOLD}
-            color="yellow"
-            active={statusFilter === 'ON_HOLD'}
-            onClick={() => setStatusFilter(statusFilter === 'ON_HOLD' ? null : 'ON_HOLD')}
-          />
-          <PortfolioStat
-            label="Completed"
-            value={statusCounts.COMPLETED}
-            color="green"
-            active={statusFilter === 'COMPLETED'}
-            onClick={() => setStatusFilter(statusFilter === 'COMPLETED' ? null : 'COMPLETED')}
-          />
-        </SimpleGrid>
+        <Group gap="md" wrap="wrap" align="stretch">
+          <Stack gap={4} style={{ minWidth: 110 }}>
+            <Text size="10px" c="dimmed" tt="uppercase" fw={700}>
+              Quick
+            </Text>
+            <PortfolioStat
+              label="All"
+              value={projects.length}
+              color="blue"
+              active={!hasActiveFilters}
+              onClick={clearFilters}
+            />
+          </Stack>
+          <Divider orientation="vertical" />
+          <Stack gap={4} style={{ flex: 2, minWidth: 260 }}>
+            <Group gap={6} align="baseline">
+              <Text size="10px" c="dimmed" tt="uppercase" fw={700}>
+                Status
+              </Text>
+              <Text size="10px" c="dimmed">
+                (pick one)
+              </Text>
+            </Group>
+            <SimpleGrid cols={{ base: 3 }} spacing="xs">
+              <PortfolioStat
+                label="Active"
+                value={statusCounts.ACTIVE}
+                color="blue"
+                active={statusFilter === 'ACTIVE'}
+                onClick={() => setStatusFilter(statusFilter === 'ACTIVE' ? null : 'ACTIVE')}
+              />
+              <PortfolioStat
+                label="On hold"
+                value={statusCounts.ON_HOLD}
+                color="yellow"
+                active={statusFilter === 'ON_HOLD'}
+                onClick={() => setStatusFilter(statusFilter === 'ON_HOLD' ? null : 'ON_HOLD')}
+              />
+              <PortfolioStat
+                label="Completed"
+                value={statusCounts.COMPLETED}
+                color="green"
+                active={statusFilter === 'COMPLETED'}
+                onClick={() => setStatusFilter(statusFilter === 'COMPLETED' ? null : 'COMPLETED')}
+              />
+            </SimpleGrid>
+          </Stack>
+          <Divider orientation="vertical" />
+          <Stack gap={4} style={{ flex: 1.5, minWidth: 200 }}>
+            <Group gap={6} align="baseline">
+              <Text size="10px" c="dimmed" tt="uppercase" fw={700}>
+                Health
+              </Text>
+              <Text size="10px" c="dimmed">
+                (pick one)
+              </Text>
+            </Group>
+            <SimpleGrid cols={{ base: 2 }} spacing="xs">
+              <PortfolioStat
+                label="Overdue"
+                value={overdueCount}
+                color="red"
+                icon={<TbAlertTriangle size={14} />}
+                active={derivedFilter === 'overdue'}
+                muted={overdueCount === 0 && derivedFilter !== 'overdue'}
+                onClick={
+                  overdueCount > 0 ? () => setDerivedFilter(derivedFilter === 'overdue' ? null : 'overdue') : undefined
+                }
+              />
+              <PortfolioStat
+                label="At risk"
+                value={atRiskCount}
+                color="yellow"
+                active={derivedFilter === 'atRisk'}
+                muted={atRiskCount === 0 && derivedFilter !== 'atRisk'}
+                onClick={
+                  atRiskCount > 0 ? () => setDerivedFilter(derivedFilter === 'atRisk' ? null : 'atRisk') : undefined
+                }
+              />
+            </SimpleGrid>
+          </Stack>
+        </Group>
       )}
 
       {projects.length > 0 && (
