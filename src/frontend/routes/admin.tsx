@@ -23,6 +23,7 @@ import { useState } from 'react'
 import {
   TbActivity,
   TbBug,
+  TbClipboardList,
   TbCode,
   TbLayoutDashboard,
   TbLayoutSidebarLeftCollapse,
@@ -35,11 +36,14 @@ import {
   TbUser,
   TbUsers,
 } from 'react-icons/tb'
+import { AuditLogsPanel } from '@/frontend/components/admin/AuditLogsPanel'
+import { ProjectsOverviewPanel } from '@/frontend/components/admin/ProjectsOverviewPanel'
+import { UsersPanel } from '@/frontend/components/admin/UsersPanel'
 import { NotificationBell } from '@/frontend/components/NotificationBell'
 import { ThemeToggle } from '@/frontend/components/ThemeToggle'
 import { useLogout, useSession } from '@/frontend/hooks/useAuth'
 
-const validTabs = ['overview', 'users', 'analytics'] as const
+const validTabs = ['overview', 'users', 'audit-logs', 'projects', 'analytics'] as const
 type TabKey = (typeof validTabs)[number]
 
 export const Route = createFileRoute('/admin')({
@@ -70,6 +74,8 @@ type NavItem = { label: string; icon: typeof TbLayoutDashboard; key: TabKey }
 const navItems: NavItem[] = [
   { label: 'Overview', icon: TbLayoutDashboard, key: 'overview' },
   { label: 'Users', icon: TbUsers, key: 'users' },
+  { label: 'Audit Logs', icon: TbClipboardList, key: 'audit-logs' },
+  { label: 'Projects', icon: TbTarget, key: 'projects' },
   { label: 'Analytics', icon: TbReportAnalytics, key: 'analytics' },
 ]
 
@@ -258,13 +264,9 @@ function AdminPage() {
       <AppShell.Main>
         <Container size="xl" px={0}>
           {active === 'overview' && <AdminOverview />}
-          {active === 'users' && (
-            <PlaceholderPanel
-              title="Users"
-              icon={TbUsers}
-              description="User management moved here from Dev Console. Coming in Phase 2."
-            />
-          )}
+          {active === 'users' && <UsersPanel />}
+          {active === 'audit-logs' && <AuditLogsPanel />}
+          {active === 'projects' && <ProjectsOverviewPanel />}
           {active === 'analytics' && (
             <PlaceholderPanel
               title="Analytics"

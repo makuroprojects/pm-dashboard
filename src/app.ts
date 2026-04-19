@@ -467,7 +467,7 @@ export function createApp() {
           where: { token },
           include: { user: { select: { role: true } } },
         })
-        if (!session || session.expiresAt < new Date() || session.user.role !== 'SUPER_ADMIN') {
+        if (!session || session.expiresAt < new Date() || !isSystemAdmin(session.user.role)) {
           set.status = 403
           return { error: 'Forbidden' }
         }
@@ -638,7 +638,7 @@ export function createApp() {
           where: { token },
           include: { user: { select: { role: true } } },
         })
-        if (!session || session.expiresAt < new Date() || session.user.role !== 'SUPER_ADMIN') {
+        if (!session || session.expiresAt < new Date() || !isSystemAdmin(session.user.role)) {
           set.status = 403
           return { error: 'Forbidden' }
         }
