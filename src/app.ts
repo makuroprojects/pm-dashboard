@@ -5,6 +5,7 @@ import { Elysia } from 'elysia'
 import { createMcpServer, type McpScope } from '../scripts/mcp/server'
 import { appLog, clearAppLogs, getAppLogs } from './lib/applog'
 import { prisma } from './lib/db'
+import { computePhantomWork, computeTaskEffort, detectGhostTasks, effortReport } from './lib/effort'
 import { env } from './lib/env'
 import { normalizeGithubRepo, verifyGithubSignature } from './lib/github'
 import { notifyTaskAssigned, notifyTaskCommented, notifyTaskStatusChanged } from './lib/notifications'
@@ -2289,6 +2290,74 @@ export function createApp() {
           retention,
           env: envChecks,
         }
+      })
+
+      // ─── Effort tracking (pm-watch × tasks) ──────────
+      .get('/api/admin/effort', async ({ request, query, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        if (!isSystemAdmin(auth.role)) {
+          set.status = 403
+          return { error: 'Forbidden' }
+        }
+        const projectId = typeof query.projectId === 'string' ? query.projectId : undefined
+        const onlyClosed = query.onlyClosed === 'true'
+        const limit = Math.min(500, Math.max(1, Number(query.limit) || 100))
+        const rows = await effortReport({ projectId, onlyClosed, limit })
+        return { count: rows.length, rows }
+      })
+
+      .get('/api/admin/effort/task/:id', async ({ request, params, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        if (!isSystemAdmin(auth.role)) {
+          set.status = 403
+          return { error: 'Forbidden' }
+        }
+        const effort = await computeTaskEffort(params.id)
+        if (!effort) {
+          set.status = 404
+          return { error: 'Task not found' }
+        }
+        return effort
+      })
+
+      .get('/api/admin/effort/ghost', async ({ request, query, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        if (!isSystemAdmin(auth.role)) {
+          set.status = 403
+          return { error: 'Forbidden' }
+        }
+        const staleDays = Math.min(30, Math.max(1, Number(query.staleDays) || 3))
+        const limit = Math.min(200, Math.max(1, Number(query.limit) || 50))
+        const rows = await detectGhostTasks({ staleDays, limit })
+        return { count: rows.length, staleDays, rows }
+      })
+
+      .get('/api/admin/effort/phantom', async ({ request, query, set }) => {
+        const auth = await requireAuth(request)
+        if (!auth) {
+          set.status = 401
+          return { error: 'Unauthorized' }
+        }
+        if (!isSystemAdmin(auth.role)) {
+          set.status = 403
+          return { error: 'Forbidden' }
+        }
+        const days = Math.min(90, Math.max(1, Number(query.days) || 7))
+        const limit = Math.min(200, Math.max(1, Number(query.limit) || 50))
+        const rows = await computePhantomWork({ days, limit })
+        return { count: rows.length, days, rows }
       })
 
       // ─── Projects API ─────────────────────────────────

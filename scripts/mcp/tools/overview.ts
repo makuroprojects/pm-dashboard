@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { prisma } from '../../../src/lib/db'
+import { computePhantomWork, computeTaskEffort, detectGhostTasks, effortReport } from '../../../src/lib/effort'
 import { jsonText, type ToolModule } from './shared'
 
 const LIVE_MS = 5 * 60 * 1000
@@ -474,6 +475,81 @@ export const overviewReadonly: ToolModule = {
           offlineAgents,
           missingEnv,
         })
+      },
+    )
+
+    server.registerTool(
+      'effort_report',
+      {
+        title: 'Estimate vs actual effort',
+        description:
+          'Per-task estimate vs actual hours (actual = sum of pm-watch window-bucket events from assignee agents in task window). Verdict: under|on|over|missing-estimate|no-assignee|no-activity.',
+        inputSchema: {
+          projectId: z.string().optional(),
+          onlyClosed: z.boolean().default(false),
+          limit: z.number().int().min(1).max(500).default(100),
+        },
+      },
+      async ({ projectId, onlyClosed, limit }) => {
+        const rows = await effortReport({ projectId, onlyClosed, limit })
+        const summary = {
+          total: rows.length,
+          withActivity: rows.filter((r) => r.actualHours > 0).length,
+          over: rows.filter((r) => r.verdict === 'over').length,
+          under: rows.filter((r) => r.verdict === 'under').length,
+          onTrack: rows.filter((r) => r.verdict === 'on').length,
+          missingEstimate: rows.filter((r) => r.verdict === 'missing-estimate').length,
+          noActivity: rows.filter((r) => r.verdict === 'no-activity').length,
+        }
+        return jsonText({ summary, rows })
+      },
+    )
+
+    server.registerTool(
+      'task_effort',
+      {
+        title: 'Task effort detail',
+        description: 'Compute actual vs estimate for a single task using pm-watch activity events.',
+        inputSchema: { taskId: z.string() },
+      },
+      async ({ taskId }) => {
+        const effort = await computeTaskEffort(taskId)
+        if (!effort) return jsonText({ error: 'Task not found' })
+        return jsonText(effort)
+      },
+    )
+
+    server.registerTool(
+      'ghost_tasks',
+      {
+        title: 'Ghost/stalled tasks',
+        description:
+          'IN_PROGRESS tasks with no updates for N days. Flags assigneeOnlineLast24h (is the user still working?) and actualHoursLast7d.',
+        inputSchema: {
+          staleDays: z.number().int().min(1).max(30).default(3),
+          limit: z.number().int().min(1).max(200).default(50),
+        },
+      },
+      async ({ staleDays, limit }) => {
+        const rows = await detectGhostTasks({ staleDays, limit })
+        return jsonText({ count: rows.length, staleDays, rows })
+      },
+    )
+
+    server.registerTool(
+      'phantom_work',
+      {
+        title: 'Untracked activity per user',
+        description:
+          'Per-user breakdown of totalHours / trackedHours (covered by at least one IN_PROGRESS or recently-closed task) / phantomHours (uncovered). Higher phantomPercent means more work outside the task system.',
+        inputSchema: {
+          days: z.number().int().min(1).max(90).default(7),
+          limit: z.number().int().min(1).max(200).default(50),
+        },
+      },
+      async ({ days, limit }) => {
+        const rows = await computePhantomWork({ days, limit })
+        return jsonText({ count: rows.length, days, rows })
       },
     )
   },

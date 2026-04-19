@@ -108,6 +108,25 @@ ActivityWatch agents push events to `/webhooks/aw` → events land in `ActivityE
 
 All three mount as `/dev` sidebar tabs (`Agents`, `Webhook Tokens`, `Webhook Monitor`).
 
+## Effort Tracking
+
+Evidence-based effort attribution: correlates pm-watch `ActivityEvent` rows (ActivityWatch window-bucket events) with `Task.startsAt` / `closedAt` windows to compute "actualHours" per task. An event belongs to an `Agent`; `Agent.claimedById` identifies the user; a task's actual hours is the sum of window-bucket event durations from that user's agents that fall inside the task's active period.
+
+- **Helpers**: `src/lib/effort.ts`
+  - `computeTaskEffort(taskId)` — single task, returns `{ actualHours, estimateHours, variancePercent, verdict, eventCount, windowStart, windowEnd }`
+  - `effortReport({ projectId?, onlyClosed?, limit? })` — batched report across many tasks
+  - `detectGhostTasks({ staleDays?, limit? })` — IN_PROGRESS tasks not moved in N days; augmented with `assigneeOnlineLast24h` (did the assignee's agents produce any activity in last 24h?) and `actualHoursLast7d`
+  - `computePhantomWork({ days?, limit? })` — per-user breakdown: `totalHours` (window-bucket events), `trackedHours` (events covered by at least one of that user's IN_PROGRESS or recently-closed tasks), `phantomHours = total − tracked`, `phantomPercent`
+- **Verdict categories**: `under` (>25% below estimate), `on` (within ±25%), `over` (>25% above), `missing-estimate`, `no-assignee`, `no-activity`
+- **API** (ADMIN + SUPER_ADMIN):
+  - `GET /api/admin/effort?projectId&onlyClosed&limit` — variance report
+  - `GET /api/admin/effort/task/:id` — single task detail
+  - `GET /api/admin/effort/ghost?staleDays&limit`
+  - `GET /api/admin/effort/phantom?days&limit`
+- **Frontend**: `/admin?tab=effort` → `EffortPanel` with 3 sub-views via SegmentedControl: Variance (5 summary cards + task table with variance %), Ghost tasks (stalled vs abandoned signal), Phantom work (per-user untracked %).
+- **MCP tools** (readonly, in `overview.ts`): `effort_report`, `task_effort`, `ghost_tasks`, `phantom_work`.
+- **Bucket filter**: events are filtered by `bucketId` containing `"window"` (i.e. `aw-watcher-window_*`). AFK-bucket events are ignored. Duration is AW-native seconds.
+
 ## GitHub Integration
 
 Projects can be linked 1:1 to a GitHub repo via `Project.githubRepo` (stored canonical `owner/repo`). GitHub pushes/PRs/reviews flow in via webhook and are surfaced as project-level activity without requiring commit-message conventions.
@@ -134,11 +153,12 @@ Projects can be linked 1:1 to a GitHub repo via `Project.githubRepo` (stored can
 Local MCP server lets Claude drive the app remotely. `.mcp.json` registers `pm-dashboard` (runs `scripts/mcp/server.ts`) alongside `playwright`. Requires `MCP_SECRET`; `MCP_SECRET_ADMIN` unlocks write/dev tools.
 
 - Entry: `scripts/mcp/server.ts` + `scripts/mcp/test-client.ts`
-- Tool modules (`scripts/mcp/tools/`): `admin`, `agents`, `code`, `db`, `dev`, `github`, `health`, `logs`, `milestones`, `overview`, `presence`, `project`, `projects`, `redis`, `tasks`, `webhooks` (16 modules, 75 tools). `shared.ts` is a helper, not a tool module.
+- Tool modules (`scripts/mcp/tools/`): `admin`, `agents`, `code`, `db`, `dev`, `github`, `health`, `logs`, `milestones`, `overview`, `presence`, `project`, `projects`, `redis`, `tasks`, `webhooks` (16 modules, 79 tools). `shared.ts` is a helper, not a tool module.
 - Agent tools: `agent_list`, `agent_get` (readonly); `agent_approve`, `agent_revoke`, `agent_reassign` (admin)
 - Webhook tools: `webhook_token_list`, `webhook_stats`, `webhook_logs` (readonly); `webhook_token_create` (returns plaintext once), `webhook_token_toggle`, `webhook_token_revoke` (admin)
 - GitHub tools (readonly): `github_summary`, `github_feed`, `github_webhook_logs` — all accept project id, name, or `owner/repo`
 - Overview tools (readonly): `admin_overview` (KPIs across users/projects/tasks/agents/webhooks), `project_health` (per-project score A-F from overdue/blocked/extensions/velocity), `team_load` (per-user open/overdue/estimated hours, flags overloaded), `risk_report` (overdue tasks + stale IN_PROGRESS + past-due projects + pending agents + offline agents + missing env, severity rolled up)
+- Effort tools (readonly, in `overview` module): `effort_report` (estimate vs actual for many tasks), `task_effort` (single task detail), `ghost_tasks` (stalled IN_PROGRESS with user-online signal), `phantom_work` (per-user untracked activity)
 - HTTP fallback: `POST /mcp` — readonly with `MCP_SECRET`, full with `MCP_SECRET_ADMIN`
 
 ## WebSocket
@@ -179,7 +199,7 @@ React 19 + Vite 8 (middleware mode in dev). File-based routing with TanStack Rou
   - `index.tsx` — Landing page (theme toggle top-right)
   - `login.tsx` — Login page (email/password + Google OAuth, theme toggle top-right)
   - `dev.tsx` — Dev console with AppShell sidebar (SUPER_ADMIN only): Overview, Users, Agents, Webhook Tokens, Webhook Monitor, App Logs, User Logs, Database (React Flow ER diagram), Project (10 sub-views — all React Flow with auto-save)
-  - `admin.tsx` — Admin console (ADMIN + SUPER_ADMIN) — overview, users, analytics tabs
+  - `admin.tsx` — Admin console (ADMIN + SUPER_ADMIN) — 9 tabs: overview, users, audit-logs, projects, tasks (triage), effort, analytics, sessions, health
   - `pm.tsx` — Project management shell (all authenticated users) — overview, projects, tasks, activity, team tabs
   - `settings.tsx` — Profile/device/notification settings (all authenticated users)
   - `dashboard.tsx` — Legacy redirect stub → `/admin`

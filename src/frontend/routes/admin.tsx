@@ -19,6 +19,7 @@ import { createFileRoute, redirect, useNavigate } from '@tanstack/react-router'
 import { useState } from 'react'
 import {
   TbClipboardList,
+  TbClockHour3,
   TbCode,
   TbHeartbeat,
   TbLayoutDashboard,
@@ -35,6 +36,7 @@ import {
 } from 'react-icons/tb'
 import { AnalyticsPanel } from '@/frontend/components/admin/AnalyticsPanel'
 import { AuditLogsPanel } from '@/frontend/components/admin/AuditLogsPanel'
+import { EffortPanel } from '@/frontend/components/admin/EffortPanel'
 import { OverviewPanel } from '@/frontend/components/admin/OverviewPanel'
 import { ProjectsOverviewPanel } from '@/frontend/components/admin/ProjectsOverviewPanel'
 import { SessionsPanel } from '@/frontend/components/admin/SessionsPanel'
@@ -45,7 +47,17 @@ import { NotificationBell } from '@/frontend/components/NotificationBell'
 import { ThemeToggle } from '@/frontend/components/ThemeToggle'
 import { useLogout, useSession } from '@/frontend/hooks/useAuth'
 
-const validTabs = ['overview', 'users', 'audit-logs', 'projects', 'tasks', 'analytics', 'sessions', 'health'] as const
+const validTabs = [
+  'overview',
+  'users',
+  'audit-logs',
+  'projects',
+  'tasks',
+  'effort',
+  'analytics',
+  'sessions',
+  'health',
+] as const
 type TabKey = (typeof validTabs)[number]
 
 export const Route = createFileRoute('/admin')({
@@ -79,6 +91,7 @@ const navItems: NavItem[] = [
   { label: 'Audit Logs', icon: TbClipboardList, key: 'audit-logs' },
   { label: 'Projects', icon: TbTarget, key: 'projects' },
   { label: 'Task Triage', icon: TbListCheck, key: 'tasks' },
+  { label: 'Effort', icon: TbClockHour3, key: 'effort' },
   { label: 'Analytics', icon: TbReportAnalytics, key: 'analytics' },
   { label: 'Sessions', icon: TbPlugConnected, key: 'sessions' },
   { label: 'System Health', icon: TbHeartbeat, key: 'health' },
@@ -273,6 +286,7 @@ function AdminPage() {
           {active === 'audit-logs' && <AuditLogsPanel />}
           {active === 'projects' && <ProjectsOverviewPanel />}
           {active === 'tasks' && <TaskTriagePanel />}
+          {active === 'effort' && <EffortPanel />}
           {active === 'analytics' && <AnalyticsPanel />}
           {active === 'sessions' && <SessionsPanel />}
           {active === 'health' && <SystemHealthPanel />}
