@@ -1403,8 +1403,8 @@ function ProjectsGanttView({
         },
       ],
       dataZoom: [
-        { type: 'slider', xAxisIndex: 0, height: 18, bottom: 8 },
-        { type: 'inside', xAxisIndex: 0 },
+        { type: 'slider', xAxisIndex: 0, height: 18, bottom: 8, filterMode: 'weakFilter' },
+        { type: 'inside', xAxisIndex: 0, filterMode: 'weakFilter' },
       ],
     } as unknown as EChartsOption
   }, [withDates, milestonesQ.data])
